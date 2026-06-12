@@ -101,7 +101,6 @@ const ExternalLinks = require('./js/external-links');
 const textureRibbon = require('./js/ui/texture-ribbon');
 const Shaders = require('./js/3D/Shaders');
 const gpuInfo = require('./js/gpu-info');
-const obsServer = require('./js/obs-server');
 const zoneLighting = require('./js/3D/zone-lighting');
 
 const Vue = require('vue/dist/vue.cjs.js');
@@ -582,14 +581,6 @@ document.addEventListener('click', function(e) {
 
 	// Load configuration.
 	await config.load();
-
-	// Start the OBS browser source server if enabled, and keep it in sync with
-	// any changes made to its configuration from the settings screen.
-	obsServer.apply_config();
-	core.view.$watch('config.obsServerEnabled', () => obsServer.apply_config());
-	core.view.$watch('config.obsSpoutEnabled', () => obsServer.apply_config());
-	core.view.$watch('config.obsServerPort', () => obsServer.apply_config());
-	core.view.$watch('config.obsServerFPS', () => obsServer.apply_config());
 
 	// Drive real zone lighting (LightData) for the model/character preview.
 	zoneLighting.set_map(core.view.config.zoneLightMapId);

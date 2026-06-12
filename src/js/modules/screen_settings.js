@@ -241,29 +241,6 @@ module.exports = {
 				</label>
 			</div>
 			<div>
-				<h1>OBS Browser Source (Live Model Feed)</h1>
-				<p>Streams the active 3D model/character preview as a seamless 1080p MJPEG video stream for use as an OBS Browser Source.</p>
-				<p>In OBS, add a <b>Browser</b> source, paste the URL below and set its size to <b>1920x1080</b>. MJPEG has no transparency, so the model is shown over the chroma colour below - add a <b>Chroma Key</b> filter in OBS (keyed to that colour) for a transparent overlay. Disable the model viewer background so only the chroma colour shows.</p>
-				<label class="ui-checkbox">
-					<input type="checkbox" v-model="$core.view.configEdit.obsServerEnabled"/>
-					<span>Enable</span>
-				</label>
-				<p v-if="$core.view.configEdit.obsServerEnabled">Browser Source URL <input type="text" class="long" :value="obs_source_url" readonly onclick="this.select()"/></p>
-				<p>Port <input type="number" min="1" max="65535" v-model.number="$core.view.configEdit.obsServerPort"/></p>
-				<p>Frame Rate <input type="number" min="1" max="60" v-model.number="$core.view.configEdit.obsServerFPS"/> FPS</p>
-				<p>Quality <input type="number" min="1" max="100" v-model.number="$core.view.configEdit.obsServerQuality"/> (1-100)</p>
-				<p>Chroma Key Colour <input type="color" v-model="$core.view.configEdit.obsServerChromaColor"/> <input type="text" v-model.trim="$core.view.configEdit.obsServerChromaColor" maxlength="7" style="width:90px"/></p>
-			</div>
-			<div>
-				<h1>Spout Output (OBS, true transparency)</h1>
-				<p>Shares the live 3D preview directly to the GPU via Spout - smooth, sharp and light on memory, with true transparency (no chroma key needed).</p>
-				<p>Requires the <b>Spout2 plugin</b> for OBS. In OBS add a <b>Spout2 Capture</b> source and pick the <b>wow.export</b> sender. Uses the Frame Rate setting above; max resolution <input type="number" min="64" max="4096" v-model.number="$core.view.configEdit.obsServerMaxSize"/> px.</p>
-				<label class="ui-checkbox">
-					<input type="checkbox" v-model="$core.view.configEdit.obsSpoutEnabled"/>
-					<span>Enable</span>
-				</label>
-			</div>
-			<div>
 				<h1>Regular Expression Filtering (Advanced)</h1>
 				<p>Allows use of regular expressions in filtering lists.</p>
 				<label class="ui-checkbox">
@@ -440,10 +417,6 @@ module.exports = {
 
 		cache_size_formatted() {
 			return generics.filesize(this.$core.view.cacheSize);
-		},
-
-		obs_source_url() {
-			return 'http://localhost:' + (this.$core.view.configEdit.obsServerPort || 25478) + '/';
 		},
 
 		available_locale_keys() {
