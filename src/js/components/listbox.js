@@ -758,11 +758,13 @@ module.exports = {
 				<option v-if="patchOptions.length === 0" value="" disabled>(loading patches…)</option>
 				<option v-for="p in patchOptions" :key="p.patch" :value="p.patch">Added in {{ p.patch }}</option>
 			</select>
+		</div>
+		<div class="filter-bar">
 			<span class="type-chips" v-if="quickfilters && quickfilters.length > 0">
 				<span class="lbl">Type</span>
 				<button class="chip" v-for="ext in quickfilters" :key="ext" :class="{ active: activeQuickFilter === ext }" @click="applyQuickFilter(ext)">{{ ext.toUpperCase() }}</button>
 			</span>
+			<span class="count-line">{{ countText }}</span>
 		</div>
-		<div class="count-line">{{ countText }}</div>
 	</div></div>`
 };

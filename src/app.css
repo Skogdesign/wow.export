@@ -2864,7 +2864,9 @@ input[type=number]::-webkit-outer-spin-button {
 	font-size: 12px;
 	padding: 3px 4px;
 	cursor: pointer;
-	max-width: 160px;
+	flex: 1;
+	min-width: 120px;
+	max-width: 340px;
 }
 .list-status .patch-select.active {
 	color: #ffffff;
@@ -2896,6 +2898,8 @@ input[type=number]::-webkit-outer-spin-button {
 .list-status .count-line {
 	font-size: 11.5px;
 	color: var(--font-faded);
+	margin-left: auto;
+	white-space: nowrap;
 }
 .list-container .ui-listbox {
 	position: absolute;
