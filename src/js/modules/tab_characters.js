@@ -2653,6 +2653,28 @@ module.exports = {
 								<input type="color" id="chr-background-color-input" v-model="$core.view.config.chrBackgroundColor"/>
 								<span>Background color</span>
 							</label>
+							<label class="ui-checkbox" title="Use an adjustable light you can aim and tune">
+								<input type="checkbox" v-model="$core.view.config.chrCustomLight"/>
+								<span>Adjustable light</span>
+							</label>
+							<template v-if="$core.view.config.chrCustomLight">
+								<div class="light-gizmo-wrap">
+									<span class="prefix-label">Light direction</span>
+									<div class="light-gizmo" @mousedown="start_light_drag" title="Drag to aim the light">
+										<div class="light-gizmo-dot" :style="light_dot_style()"></div>
+									</div>
+									<span class="light-gizmo-readout">H {{ $core.view.config.chrLightAzimuth }}&deg; &middot; V {{ $core.view.config.chrLightElevation }}&deg;</span>
+								</div>
+								<div class="light-control">
+									<span class="prefix-label">Intensity: {{ light_value_label($core.view.config.chrLightIntensity) }}</span>
+									<input type="range" min="0" max="2" step="0.05" v-model.number="$core.view.config.chrLightIntensity"/>
+								</div>
+								<div class="light-control">
+									<span class="prefix-label">Ambient: {{ light_value_label($core.view.config.chrLightAmbient) }}</span>
+									<input type="range" min="0" max="1" step="0.05" v-model.number="$core.view.config.chrLightAmbient"/>
+								</div>
+								<input type="button" value="Reset Light" class="light-reset-btn" @click="reset_custom_light"/>
+							</template>
 							<label v-if="false" class="ui-checkbox" title="Light the model using a zone's real in-game lighting (LightData)">
 								<input type="checkbox" v-model="$core.view.config.zoneLightEnabled"/>
 								<span>In-game zone lighting</span>
@@ -2756,6 +2778,56 @@ module.exports = {
 	methods: {
 		import_wmv() {
 			import_wmv_character(this.$core);
+		},
+
+		// --- adjustable light (character viewer, camera-relative) ---
+		light_value_label(value) {
+			return Number(value ?? 0).toFixed(2);
+		},
+
+		reset_custom_light() {
+			const cfg = this.$core.view.config;
+			cfg.chrLightAzimuth = 45;
+			cfg.chrLightElevation = 35;
+			cfg.chrLightIntensity = 0.8;
+			cfg.chrLightAmbient = 0.45;
+		},
+
+		// Position of the light gizmo dot (horizontal = azimuth, vertical =
+		// elevation; top of pad = light from above).
+		light_dot_style() {
+			const az = this.$core.view.config.chrLightAzimuth ?? 45;
+			const el = this.$core.view.config.chrLightElevation ?? 35;
+			return {
+				left: ((az / 360) * 100) + '%',
+				top: (((90 - el) / 180) * 100) + '%'
+			};
+		},
+
+		// Drag the light gizmo to set azimuth (x) and elevation (y) at once.
+		start_light_drag(event) {
+			const pad = event.currentTarget;
+			const cfg = this.$core.view.config;
+
+			const update = (e) => {
+				const rect = pad.getBoundingClientRect();
+				const fx = Math.min(Math.max((e.clientX - rect.left) / rect.width, 0), 1);
+				const fy = Math.min(Math.max((e.clientY - rect.top) / rect.height, 0), 1);
+				cfg.chrLightAzimuth = Math.round(fx * 360);
+				cfg.chrLightElevation = Math.round(90 - fy * 180);
+			};
+
+			update(event);
+
+			const move = (e) => update(e);
+			const up = () => {
+				document.removeEventListener('mousemove', move);
+				document.removeEventListener('mouseup', up);
+			};
+
+			document.addEventListener('mousemove', move);
+			document.addEventListener('mouseup', up);
+			event.preventDefault();
 		},
 
 		import_character() {

@@ -1538,14 +1538,31 @@ class M2RendererGL {
 		// transform light direction to view space
 		let light_view_x, light_view_y, light_view_z;
 		if (this.ctx.cameraRelativeLight && !zl) {
-			// character viewer: a fixed world light appears to come from behind
-			// when the model is rotated under the fixed camera. Define the key
-			// light directly in view space so the camera-facing side is always
-			// lit (light from above-front, slightly to the side).
-			const n = 1 / Math.sqrt(0.35 * 0.35 + 0.5 * 0.5 + 1);
-			light_view_x = -0.35 * n;
-			light_view_y = -0.5 * n;
-			light_view_z = -1 * n;
+			// character viewer: the model rotates under a fixed camera, so a
+			// world-fixed light appears to come from behind when turned. Define
+			// the key light directly in VIEW space so it stays consistent — and
+			// adjustable — relative to the camera (az=0/el=0 lights the front).
+			if (cfg.chrCustomLight) {
+				const az = (cfg.chrLightAzimuth ?? 45) * Math.PI / 180;
+				const el = (cfg.chrLightElevation ?? 35) * Math.PI / 180;
+				const cos_el = Math.cos(el);
+				light_view_x = -(cos_el * Math.sin(az));
+				light_view_y = -Math.sin(el);
+				light_view_z = -(cos_el * Math.cos(az));
+
+				const intensity = cfg.chrLightIntensity ?? 0.8;
+				const ambient = cfg.chrLightAmbient ?? 0.45;
+				amb_r = amb_g = amb_b = ambient;
+				dif_r = dif_g = dif_b = intensity;
+			} else {
+				// neutral default key light from above-front.
+				const n = 1 / Math.sqrt(0.35 * 0.35 + 0.5 * 0.5 + 1);
+				light_view_x = -0.35 * n;
+				light_view_y = -0.5 * n;
+				light_view_z = -1 * n;
+				amb_r = amb_g = amb_b = 0.5;
+				dif_r = dif_g = dif_b = 0.7;
+			}
 		} else {
 			light_view_x = view_matrix[0] * lx + view_matrix[4] * ly + view_matrix[8] * lz;
 			light_view_y = view_matrix[1] * lx + view_matrix[5] * ly + view_matrix[9] * lz;
