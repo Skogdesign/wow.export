@@ -300,15 +300,18 @@ module.exports = {
 		// Draws the current scene to the bound canvas at its current backing
 		// resolution. Separated from render() so it can be reused for off-cycle
 		// high-resolution captures without disturbing the animation loop.
-		draw_scene: function() {
+		draw_scene: function(bg_override = null) {
 			const activeRenderer = this.context.getActiveRenderer?.();
 
-			// clear with appropriate background
+			// clear with appropriate background (bg_override forces a clear colour,
+			// used by the transparent-export two-pass capture)
 			const is_chr = this.context.useCharacterControls;
 			const show_bg = is_chr ? core.view.config.chrShowBackground : core.view.config.modelViewerShowBackground;
 			const bg_color = is_chr ? core.view.config.chrBackgroundColor : core.view.config.modelViewerBackgroundColor;
 
-			if (show_bg) {
+			if (bg_override) {
+				this.gl_context.set_clear_color(bg_override[0], bg_override[1], bg_override[2], bg_override[3]);
+			} else if (show_bg) {
 				const [r, g, b] = parse_hex_color(bg_color);
 				this.gl_context.set_clear_color(r, g, b, 1);
 			} else {
@@ -465,15 +468,51 @@ module.exports = {
 				canvas.height = cap_h;
 				this.gl_context.set_viewport(cap_w, cap_h);
 
-				this.draw_scene();
-
 				// Copy into a 2D canvas: the source is a WebGL canvas, so reading
 				// pixels (for cropping) requires a 2D context.
 				const tmp = document.createElement('canvas');
 				tmp.width = cap_w;
 				tmp.height = cap_h;
 				const tctx = tmp.getContext('2d');
-				tctx.drawImage(canvas, 0, 0);
+
+				const is_chr = this.context.useCharacterControls;
+				const show_bg = is_chr ? core.view.config.chrShowBackground : core.view.config.modelViewerShowBackground;
+
+				if (show_bg) {
+					// Opaque background: a single pass is exact.
+					this.draw_scene();
+					tctx.drawImage(canvas, 0, 0);
+				} else {
+					// Transparent export: additive/glow effects barely write alpha,
+					// so they vanish on a transparent background. Render the frame
+					// over black and over white, then recover straight alpha per
+					// pixel (a = 1 - (white - black)) so glows survive on any
+					// background while opaque parts stay identical to the viewer.
+					this.draw_scene([0, 0, 0, 1]);
+					const black_ctx = document.createElement('canvas').getContext('2d');
+					black_ctx.canvas.width = cap_w;
+					black_ctx.canvas.height = cap_h;
+					black_ctx.drawImage(canvas, 0, 0);
+					const black = black_ctx.getImageData(0, 0, cap_w, cap_h).data;
+
+					this.draw_scene([1, 1, 1, 1]);
+					tctx.drawImage(canvas, 0, 0);
+					const white_img = tctx.getImageData(0, 0, cap_w, cap_h);
+					const white = white_img.data;
+
+					for (let i = 0; i < white.length; i += 4) {
+						const a = 255 - Math.max(0, Math.min(255, ((white[i] - black[i]) + (white[i + 1] - black[i + 1]) + (white[i + 2] - black[i + 2])) / 3));
+						if (a <= 0) {
+							white[i] = white[i + 1] = white[i + 2] = white[i + 3] = 0;
+							continue;
+						}
+						white[i] = Math.min(255, black[i] * 255 / a);
+						white[i + 1] = Math.min(255, black[i + 1] * 255 / a);
+						white[i + 2] = Math.min(255, black[i + 2] * 255 / a);
+						white[i + 3] = a;
+					}
+					tctx.putImageData(white_img, 0, 0);
+				}
 
 				// When the background is opaque we can't crop; return as-is.
 				const should_crop = core.view.config.previewExportCrop !== false;
