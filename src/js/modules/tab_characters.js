@@ -588,6 +588,19 @@ async function update_textures(core) {
 		}
 	}
 
+	// step 4b: cape (back slot). The cloak's design is a direct M2 texture
+	// (type 2, "object skin") on the cape geoset, not a composited skin
+	// section, so it is applied straight to the body model rather than through
+	// the chr_materials pipeline above.
+	const back_item_id = equipped_items?.[15];
+	if (back_item_id && !DBGuildTabard.isGuildTabard(back_item_id)) {
+		const back_char_info = get_current_race_gender(core);
+		const back_display = DBItemModels.getItemDisplay(back_item_id, back_char_info?.raceID, back_char_info?.genderIndex, item_skins?.[15]);
+		const cape_texture = back_display?.textures?.find(t => t > 0);
+		if (cape_texture !== undefined)
+			await active_renderer.overrideTextureType(2, cape_texture);
+	}
+
 	// step 5: upload all textures to GPU
 	await character_appearance.upload_textures_to_gpu(active_renderer, chr_materials);
 }
