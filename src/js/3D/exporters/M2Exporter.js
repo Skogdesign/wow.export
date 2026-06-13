@@ -20,6 +20,10 @@ const GLTFWriter = require('../writers/GLTFWriter');
 const GeosetMapper = require('../GeosetMapper');
 const ExportHelper = require('../../casc/export-helper');
 const BufferWrapper = require('../../buffer');
+const ParticleEmitter = require('../ParticleEmitter');
+
+// identity matrix reused for the headless particle snapshot
+const PARTICLE_IDENTITY = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
 
 class M2Exporter {
 	/**
@@ -401,7 +405,93 @@ class M2Exporter {
 			}
 		}
 
+		// bake a static snapshot of the particle systems (gated by the viewer toggle)
+		if (core.view.config.modelViewerShowParticles !== false)
+			this._addParticlesToGLTF(gltf, textureMap);
+
 		await gltf.write(core.view.config.overwriteFiles, format);
+	}
+
+	/**
+	 * Append a single-frame snapshot of the model's particle emitters to the GLTF
+	 * as separate, unrigged meshes. Particles are time-varying, so this bakes one
+	 * representative frame after running each emitter forward to a steady state.
+	 * Per-particle colour/blend is not represented (only the emitter texture is),
+	 * so the result is an approximation of the live effect.
+	 * @param {GLTFWriter} gltf
+	 * @param {Map} textureMap
+	 * @private
+	 */
+	_addParticlesToGLTF(gltf, textureMap) {
+		const emitters = this.m2.particleEmitters;
+		if (!emitters || emitters.length === 0)
+			return;
+
+		// sample an emitter track at its first keyframe (animation 0) as a constant
+		const sample = (track, def) => {
+			if (track && track.values && track.values[0] && track.values[0].length > 0)
+				return track.values[0][0];
+			return def;
+		};
+
+		const right = [1, 0, 0];
+		const up = [0, 1, 0];
+		let added = 0;
+
+		for (let i = 0; i < emitters.length; i++) {
+			const emitter = emitters[i];
+			const sys = new ParticleEmitter(emitter);
+
+			// run forward ~3s so the spray populates before snapshotting
+			for (let s = 0; s < 90; s++)
+				sys.update(1 / 30, sample, PARTICLE_IDENTITY);
+
+			const data = sys.getRenderQuads(right, up, PARTICLE_IDENTITY);
+			if (!data || data.length === 0)
+				continue;
+
+			const stride = ParticleEmitter.FLOATS_PER_VERTEX;
+			const vcount = data.length / stride;
+			const vertices = new Array(vcount * 3);
+			const normals = new Array(vcount * 3);
+			const uv = new Array(vcount * 2);
+			const triangles = new Array(vcount);
+
+			for (let v = 0; v < vcount; v++) {
+				const o = v * stride;
+				vertices[v * 3] = data[o];
+				vertices[v * 3 + 1] = data[o + 1];
+				vertices[v * 3 + 2] = data[o + 2];
+				normals[v * 3] = 0;
+				normals[v * 3 + 1] = 0;
+				normals[v * 3 + 2] = 1;
+				uv[v * 2] = data[o + 3];
+				uv[v * 2 + 1] = data[o + 4];
+				triangles[v] = v;
+			}
+
+			// resolve the emitter texture's material (already exported with the model).
+			// sys.textureIndex has the multi-texture packing already decoded.
+			let matName;
+			const tex = this.m2.textures[sys.textureIndex];
+			if (tex && tex.fileDataID && textureMap.has(tex.fileDataID))
+				matName = textureMap.get(tex.fileDataID).matName;
+
+			gltf.addEquipmentModel({
+				name: 'Particles_' + i,
+				vertices,
+				normals,
+				uv,
+				boneIndices: [],
+				boneWeights: [],
+				meshes: [{ name: 'emitter', triangles, matName }]
+			});
+
+			added++;
+		}
+
+		if (added > 0)
+			log.write('Baked %d particle emitter snapshot(s) into GLTF export', added);
 	}
 
 	/**

@@ -29,6 +29,7 @@ class M2Loader {
 		this.data = data;
 		this.isLoaded = false;
 		this.animFiles = new Map();
+		this.particleEmitters = [];
 	}
 
 	/**
@@ -360,17 +361,127 @@ class M2Loader {
 		this.parseChunk_MD21_collision(ofs);
 		this.parseChunk_MD21_attachments(ofs);
 		this.parseChunk_MD21_attachmentLookup(ofs);
-		// this.data.move(8); // events
-		// this.data.move(8); // lights
-		// this.data.move(8); // cameras
-		// this.data.move(8); // camera_lookup_table
-		// this.data.move(8); // ribbon_emitters
-		// this.data.move(8); // particle_emitters
-		
+		this.data.move(8); // events
+		this.data.move(8); // lights
+		this.data.move(8); // cameras
+		this.data.move(8); // camera_lookup_table
+		this.data.move(8); // ribbon_emitters
+		this.parseChunk_MD21_particleEmitters(ofs);
+
 		// // if 0x8 is set, textureCombinerCombos
 		// if (this.flags & 0x8)
 		// 	this.data.move(8);
 
+	}
+
+	/**
+	 * Parse particle emitters from an MD21 chunk.
+	 *
+	 * Layout follows the WotLK+ M2Particle struct (the rest of this loader already
+	 * assumes the WotLK+ animation-block form, so we do too). Cataclysm+ files
+	 * (version >= 272) carry two extra trailing multi-texture param blocks. See
+	 * https://wowdev.wiki/M2#Particles and pywowlib's m2_format.M2Particle.
+	 * @param {number} ofs
+	 */
+	parseChunk_MD21_particleEmitters(ofs) {
+		const data = this.data;
+		const count = data.readUInt32LE();
+		const arrOfs = data.readUInt32LE();
+
+		const base = data.offset;
+		data.seek(arrOfs + ofs);
+
+		// Cataclysm (4.x) and later append multi_texture_param0/1 (2x8 bytes).
+		const isCata = (this.version ?? 0) >= 272;
+
+		const track = (type) => M2Generics.read_m2_track(data, ofs, type, false, new Map(), false, this.animations);
+		const fblock = (type) => M2Generics.read_fblock(data, ofs, type);
+
+		const emitters = this.particleEmitters = new Array(count);
+		for (let i = 0; i < count; i++) {
+			const e = {};
+
+			e.particleId = data.readUInt32LE();
+			e.flags = data.readUInt32LE();
+
+			// position pivot - convert WoW (x, y, z) to GL (x, z, -y) as elsewhere.
+			const px = data.readFloatLE();
+			const py = data.readFloatLE();
+			const pz = data.readFloatLE();
+			e.position = [px, pz, -py];
+
+			e.bone = data.readUInt16LE();
+			e.texture = data.readUInt16LE();
+
+			data.move(8); // geometry_model_filename (M2Array<char>)
+			data.move(8); // recursion_model_filename (M2Array<char>)
+
+			e.blendingType = data.readUInt8();
+			e.emitterType = data.readUInt8();
+			e.particleColorIndex = data.readUInt16LE();
+
+			// CATA+: fixed-point multi-texture params; pre-CATA: particleType + headOrTail.
+			// Same 2-byte footprint either way.
+			e.multiTextureParamX = data.readUInt8();
+			e.multiTextureParamY = data.readUInt8();
+
+			e.textureTileRotation = data.readInt16LE();
+			e.textureDimensionsRows = data.readUInt16LE();
+			e.textureDimensionsColumns = data.readUInt16LE();
+
+			e.emissionSpeed = track('float');
+			e.speedVariation = track('float');
+			e.verticalRange = track('float');
+			e.horizontalRange = track('float');
+			e.gravity = track('float');
+			e.lifespan = track('float');
+			e.lifespanVary = data.readFloatLE();
+			e.emissionRate = track('float');
+			e.emissionRateVary = data.readFloatLE();
+			e.emissionAreaLength = track('float');
+			e.emissionAreaWidth = track('float');
+			e.zSource = track('float');
+
+			e.colorTrack = fblock('float3'); // RGB key values
+			e.alphaTrack = fblock('int16');  // fixed16, normalize by 0x7FFF
+			e.scaleTrack = fblock('float2'); // (x, y) scale key values
+			e.scaleVary = data.readFloatLE(2);
+			e.headCellTrack = fblock('uint16');
+			e.tailCellTrack = fblock('uint16');
+
+			e.tailLength = data.readFloatLE();
+			e.twinkleSpeed = data.readFloatLE();
+			e.twinklePercent = data.readFloatLE();
+			e.twinkleScale = data.readFloatLE(2); // CRange (min, max)
+			e.burstMultiplier = data.readFloatLE();
+			e.drag = data.readFloatLE();
+			e.baseSpin = data.readFloatLE();
+			e.baseSpinVary = data.readFloatLE();
+			e.spin = data.readFloatLE();
+			e.spinVary = data.readFloatLE();
+
+			e.tumbleMin = data.readFloatLE(3);
+			e.tumbleMax = data.readFloatLE(3);
+			e.windVector = data.readFloatLE(3);
+			e.windTime = data.readFloatLE();
+
+			e.followSpeed1 = data.readFloatLE();
+			e.followScale1 = data.readFloatLE();
+			e.followSpeed2 = data.readFloatLE();
+			e.followScale2 = data.readFloatLE();
+
+			data.move(8); // spline_points (M2Array<C3Vector>)
+			e.enabledIn = track('uint8');
+
+			if (isCata) {
+				data.move(8); // multi_texture_param0 (2x Vector_2fp_6_9)
+				data.move(8); // multi_texture_param1 (2x Vector_2fp_6_9)
+			}
+
+			emitters[i] = e;
+		}
+
+		data.seek(base);
 	}
 
 	parseChunk_MD21_bones(ofs) {

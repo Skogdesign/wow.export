@@ -2119,6 +2119,21 @@ const export_char_model = async (core) => {
 	const export_paths = core.openLastExportStream();
 	const format = core.view.config.exportCharacterFormat;
 
+	// designer preview formats (sequence / turntable / render passes) route through
+	// the shared util; plain PNG/CLIPBOARD keep their existing inline handling below.
+	if (modelViewerUtils.is_preview_format(format) && format !== 'PNG' && format !== 'CLIPBOARD') {
+		if (active_model) {
+			const canvas = document.querySelector('.char-preview canvas');
+			const file_name = listfile.getByID(active_model);
+			await modelViewerUtils.export_preview(core, format, canvas, file_name);
+		} else {
+			core.setToast('error', 'The selected export option only works for character previews. Preview something first!', null, -1);
+		}
+
+		export_paths?.close();
+		return;
+	}
+
 	if (format === 'PNG' || format === 'CLIPBOARD') {
 		if (active_model) {
 			core.setToast('progress', 'saving preview, hold on...', null, -1, false);
@@ -2640,6 +2655,10 @@ module.exports = {
 							<label class="ui-checkbox" title="Render Shadow">
 								<input type="checkbox" v-model="$core.view.config.chrRenderShadow"/>
 								<span>Render shadow</span>
+							</label>
+							<label class="ui-checkbox" title="Render particle effects (spell glows, flames, enchants) on the character and equipment">
+								<input type="checkbox" v-model="$core.view.config.chrShowParticles"/>
+								<span>Show particles</span>
 							</label>
 							<label class="ui-checkbox" title="Use 3D Camera">
 								<input type="checkbox" v-model="$core.view.config.chrUse3DCamera"/>

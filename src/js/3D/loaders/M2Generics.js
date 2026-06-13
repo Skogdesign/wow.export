@@ -58,6 +58,14 @@ function read_m2_array_array(data, ofs, dataType, useAnims = false, animFiles = 
 						animFiles.get(i).seek(subArrOfs + (j * 2));
 						arr[i][j] = animFiles.get(i).readInt16LE();
 						break;
+					case 'float':
+						animFiles.get(i).seek(subArrOfs + (j * 4));
+						arr[i][j] = animFiles.get(i).readFloatLE();
+						break;
+					case 'float2':
+						animFiles.get(i).seek(subArrOfs + (j * 8));
+						arr[i][j] = animFiles.get(i).readFloatLE(2);
+						break;
 					case 'float3':
 						animFiles.get(i).seek(subArrOfs + (j * 12));
 						arr[i][j] = animFiles.get(i).readFloatLE(3);
@@ -84,6 +92,12 @@ function read_m2_array_array(data, ofs, dataType, useAnims = false, animFiles = 
 						break;
 					case 'int16':
 						arr[i][j] = data.readInt16LE();
+						break;
+					case 'float':
+						arr[i][j] = data.readFloatLE();
+						break;
+					case 'float2':
+						arr[i][j] = data.readFloatLE(2);
 						break;
 					case 'float3':
 						arr[i][j] = data.readFloatLE(3);
@@ -214,4 +228,51 @@ function read_caa_bb(data) {
 	return { min: data.readFloatLE(3), max: data.readFloatLE(3) };
 }
 
-module.exports = { M2Track, read_m2_array_array, read_m2_track, read_caa_bb, patch_track_animation }
+/**
+ * Read a simple (flat) M2Array<type> and return its values. The cursor is left
+ * immediately after the 8-byte array header (count + offset), matching the other
+ * readers in this module.
+ * @param {BufferWrapper} data
+ * @param {number} ofs - base offset the array offset is relative to (MD20 start)
+ * @param {string} dataType
+ * @returns {Array}
+ */
+function read_m2_array(data, ofs, dataType) {
+	const count = data.readUInt32LE();
+	const arrOfs = data.readUInt32LE();
+
+	const base = data.offset;
+	data.seek(ofs + arrOfs);
+
+	const arr = new Array(count);
+	for (let i = 0; i < count; i++) {
+		switch (dataType) {
+			case 'uint16': arr[i] = data.readUInt16LE(); break;
+			case 'int16': arr[i] = data.readInt16LE(); break;
+			case 'float': arr[i] = data.readFloatLE(); break;
+			case 'float2': arr[i] = data.readFloatLE(2); break;
+			case 'float3': arr[i] = data.readFloatLE(3); break;
+			default: throw new Error(`Unknown data type: ${dataType}`);
+		}
+	}
+
+	data.seek(base);
+	return arr;
+}
+
+/**
+ * Read an M2 particle "fast" track (M2PartTrack / FBlock): a pair of flat M2Arrays
+ * holding uint16 timestamps and typed key values. Used for the per-lifetime
+ * color/alpha/scale/cell tables of a particle emitter. Consumes a 16-byte header.
+ * @param {BufferWrapper} data
+ * @param {number} ofs
+ * @param {string} valueType
+ * @returns {{ timestamps: Array, values: Array }}
+ */
+function read_fblock(data, ofs, valueType) {
+	const timestamps = read_m2_array(data, ofs, 'uint16');
+	const values = read_m2_array(data, ofs, valueType);
+	return { timestamps, values };
+}
+
+module.exports = { M2Track, read_m2_array_array, read_m2_array, read_m2_track, read_fblock, read_caa_bb, patch_track_animation }

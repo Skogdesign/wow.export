@@ -11,6 +11,7 @@ const zoneLighting = require('../zone-lighting');
 const BLPFile = require('../../casc/blp');
 const M2Loader = require('../loaders/M2Loader');
 const SKELLoader = require('../loaders/SKELLoader');
+const ParticleEmitter = require('../ParticleEmitter');
 const GeosetMapper = require('../GeosetMapper');
 const ShaderMapper = require('../ShaderMapper');
 const Shaders = require('../Shaders');
@@ -396,6 +397,12 @@ class M2RendererGL {
 		// material data
 		this.material_props = new Map();
 		this.shader_map = new Map();
+
+		// particle systems (one per emitter); GL resources created lazily on load
+		this.particle_shader = null;
+		this.particle_systems = [];
+		this.particle_vao = null;
+		this.particle_vbo = null;
 	}
 
 	/**
@@ -424,6 +431,12 @@ class M2RendererGL {
 		this.submesh_colors = new Float32Array(this.m2.colors.length * 4);
 		this.tex_weights = new Float32Array(this.m2.textureWeights.length);
 		this.tex_weights.fill(1);
+
+		// particle emitters - simulate on the CPU and draw as billboarded quads.
+		if (this.m2.particleEmitters && this.m2.particleEmitters.length > 0) {
+			this.particle_shader = Shaders.create_program(this.ctx, 'particle');
+			this.particle_systems = this.m2.particleEmitters.map(e => new ParticleEmitter(e));
+		}
 
 		// load first skin
 		if (this.m2.vertices.length > 0) {
@@ -845,6 +858,41 @@ class M2RendererGL {
 		this._update_tex_matrices();
 		this._update_submesh_colors();
 		this._update_tex_weights();
+
+		// advance particle simulation (bone matrices are now current)
+		this._update_particles(delta_time);
+	}
+
+	/**
+	 * Advance all particle systems using the current animation/bone state.
+	 * @param {number} delta_time - seconds
+	 */
+	_update_particles(delta_time) {
+		if (!this.particle_systems.length || !this.bone_matrices)
+			return;
+
+		const anim_source = this.current_anim_source || this.skelLoader || this.m2;
+		const anim_idx = this.current_anim_index ?? this.current_animation;
+		const anim = anim_source.animations?.[anim_idx];
+		if (!anim)
+			return;
+
+		// sample an emitter M2Track (single-float) at the current animation time
+		const sample = (track, def) => {
+			if (!track || !track.timestamps)
+				return def;
+			return this._animate_track(anim, track, def, lerp);
+		};
+
+		const matrices = this.bone_matrices;
+		for (const sys of this.particle_systems) {
+			const bone = sys.emitter.bone;
+			let bone_matrix = null;
+			if (bone >= 0 && (bone + 1) * 16 <= matrices.length)
+				bone_matrix = matrices.subarray(bone * 16, bone * 16 + 16);
+
+			sys.update(delta_time, sample, bone_matrix);
+		}
 	}
 
 	get_animation_duration() {
@@ -1480,9 +1528,13 @@ class M2RendererGL {
 	 * @param {Float32Array} view_matrix
 	 * @param {Float32Array} projection_matrix
 	 */
-	render(view_matrix, projection_matrix) {
+	render(view_matrix, projection_matrix, pass = 'beauty') {
 		if (!this.shader || this.draw_calls.length === 0)
 			return;
+
+		// emissive pass: draw only additive/glow materials (+ particles) so the
+		// result can be composited in "Screen/Add" in Photoshop/After Effects.
+		const emissive_only = pass === 'emissive';
 
 		const gl = this.gl;
 		const ctx = this.ctx;
@@ -1605,6 +1657,11 @@ class M2RendererGL {
 			if (!dc.visible)
 				continue;
 
+			// emissive pass keeps only additive blend modes (ADD / NO_ALPHA_ADD /
+			// BLEND_ADD) so the glow layer is isolated from the solid geometry.
+			if (emissive_only && dc.blend_mode !== 3 && dc.blend_mode !== 4 && dc.blend_mode !== 7)
+				continue;
+
 			// set material uniforms
 			shader.set_uniform_1i('u_vertex_shader', dc.vertex_shader);
 			shader.set_uniform_1i('u_pixel_shader', dc.pixel_shader);
@@ -1680,11 +1737,93 @@ class M2RendererGL {
 			}
 		}
 
+		// particles draw last so they composite over the solid geometry
+		this._render_particles(view_matrix, projection_matrix);
+
 		// reset state
 		ctx.set_blend(false);
 		ctx.set_depth_test(true);
 		ctx.set_depth_write(true);
 		ctx.set_cull_face(false);
+	}
+
+	/**
+	 * Lazily create the dynamic VAO/VBO used for particle quads.
+	 */
+	_create_particle_buffers() {
+		const gl = this.gl;
+		this.particle_vao = new VertexArray(this.ctx);
+		this.particle_vao.bind();
+
+		// allocate the dynamic vbo through the VAO so set_attribute (which binds
+		// the VAO's own vbo field) points at the right buffer.
+		this.particle_vao.set_vertex_buffer(new Float32Array(0), gl.DYNAMIC_DRAW);
+		this.particle_vbo = this.particle_vao.vbo;
+
+		// interleaved: position(3f) + uv(2f) + color(4f) = 36 bytes
+		const stride = ParticleEmitter.FLOATS_PER_VERTEX * 4;
+		this.particle_vao.set_attribute(0, 3, gl.FLOAT, false, stride, 0);
+		this.particle_vao.set_attribute(1, 2, gl.FLOAT, false, stride, 12);
+		this.particle_vao.set_attribute(2, 4, gl.FLOAT, false, stride, 20);
+	}
+
+	/**
+	 * Draw all particle systems as billboarded, textured quads.
+	 * @param {Float32Array} view_matrix
+	 * @param {Float32Array} projection_matrix
+	 */
+	_render_particles(view_matrix, projection_matrix) {
+		if (!this.particle_shader || this.particle_systems.length === 0)
+			return;
+
+		// on/off toggle: character viewer vs model viewer use separate config keys
+		const cfg = core.view.config;
+		const enabled = this.ctx.cameraRelativeLight
+			? cfg.chrShowParticles !== false
+			: cfg.modelViewerShowParticles !== false;
+		if (!enabled)
+			return;
+
+		const gl = this.gl;
+		const ctx = this.ctx;
+		const shader = this.particle_shader;
+
+		if (!this.particle_vao)
+			this._create_particle_buffers();
+
+		shader.use();
+		shader.set_uniform_mat4('u_view_matrix', false, view_matrix);
+		shader.set_uniform_mat4('u_projection_matrix', false, projection_matrix);
+		shader.set_uniform_1i('u_texture1', 0);
+
+		// world-space camera basis for CPU billboarding
+		const right = [view_matrix[0], view_matrix[4], view_matrix[8]];
+		const up = [view_matrix[1], view_matrix[5], view_matrix[9]];
+
+		ctx.set_depth_test(true);
+		ctx.set_cull_face(false);
+
+		this.particle_vao.bind();
+		gl.bindBuffer(gl.ARRAY_BUFFER, this.particle_vbo);
+
+		for (const sys of this.particle_systems) {
+			const data = sys.getRenderQuads(right, up, this.model_matrix);
+			if (!data || data.length === 0)
+				continue;
+
+			const blend = M2BLEND_TO_EGX[sys.blendingType] ?? GLContext.BlendMode.ADD;
+			ctx.apply_blend_mode(blend);
+			ctx.set_depth_write(false); // particles never write depth
+
+			const tex = this.textures.get(sys.textureIndex) || this.default_texture;
+			tex.bind(0);
+
+			gl.bufferData(gl.ARRAY_BUFFER, data, gl.DYNAMIC_DRAW);
+			gl.drawArrays(gl.TRIANGLES, 0, data.length / ParticleEmitter.FLOATS_PER_VERTEX);
+		}
+
+		ctx.set_blend(false);
+		ctx.set_depth_write(true);
 	}
 
 	/**
@@ -1995,6 +2134,14 @@ class M2RendererGL {
 		this.bonesWatcher?.();
 
 		this._dispose_skin();
+
+		// dispose particle GL resources (the VAO owns and deletes its vbo)
+		if (this.particle_vao) {
+			this.particle_vao.dispose();
+			this.particle_vao = null;
+		}
+		this.particle_vbo = null;
+		this.particle_systems = [];
 
 		// dispose textures
 		for (const tex of this.textures.values())

@@ -12,6 +12,7 @@ const ShaderProgram = require('./gl/ShaderProgram');
 
 const SHADER_MANIFEST = {
 	m2: { vert: 'm2.vertex.shader', frag: 'm2.fragment.shader' },
+	particle: { vert: 'particle.vertex.shader', frag: 'particle.fragment.shader' },
 	wmo: { vert: 'wmo.vertex.shader', frag: 'wmo.fragment.shader' },
 	adt: { vert: 'adt.vertex.shader', frag: 'adt.fragment.shader' },
 	adt_old: { vert: 'adt.vertex.shader', frag: 'adt.fragment.old.shader' },

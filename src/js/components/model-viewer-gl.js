@@ -300,8 +300,9 @@ module.exports = {
 		// Draws the current scene to the bound canvas at its current backing
 		// resolution. Separated from render() so it can be reused for off-cycle
 		// high-resolution captures without disturbing the animation loop.
-		draw_scene: function(bg_override = null) {
+		draw_scene: function(bg_override = null, pass = 'beauty') {
 			const activeRenderer = this.context.getActiveRenderer?.();
+			const beauty = pass === 'beauty';
 
 			// clear with appropriate background (bg_override forces a clear colour,
 			// used by the transparent-export two-pass capture)
@@ -319,12 +320,13 @@ module.exports = {
 			}
 			this.gl_context.clear(true, true);
 
-			// render shadow plane (before model, for character mode)
-			if (this.shadow_renderer && this.shadow_renderer.visible)
+			// render shadow plane (before model, for character mode). Skipped for
+			// non-beauty passes so it doesn't pollute matte/emissive/depth output.
+			if (beauty && this.shadow_renderer && this.shadow_renderer.visible)
 				this.shadow_renderer.render(this.camera.view_matrix, this.camera.projection_matrix);
 
-			// render grid (not in character mode)
-			if (core.view.config.modelViewerShowGrid && this.grid_renderer && !this.context.useCharacterControls)
+			// render grid (not in character mode; beauty pass only)
+			if (beauty && core.view.config.modelViewerShowGrid && this.grid_renderer && !this.context.useCharacterControls)
 				this.grid_renderer.render(this.camera.view_matrix, this.camera.projection_matrix);
 
 			// render equipment models at attachment points (character mode only)
@@ -360,7 +362,7 @@ module.exports = {
 
 			// render model
 			if (activeRenderer && activeRenderer.render)
-				activeRenderer.render(this.camera.view_matrix, this.camera.projection_matrix);
+				activeRenderer.render(this.camera.view_matrix, this.camera.projection_matrix, pass);
 
 			if (equipment_renderers && activeRenderer) {
 				const char_bone_matrices = activeRenderer.bone_matrices;
@@ -388,7 +390,7 @@ module.exports = {
 								renderer.setTransformMatrix(attach_transform);
 						}
 
-						renderer.render(this.camera.view_matrix, this.camera.projection_matrix);
+						renderer.render(this.camera.view_matrix, this.camera.projection_matrix, pass);
 					}
 				}
 			}
@@ -415,7 +417,7 @@ module.exports = {
 						if (char_model_matrix)
 							renderer.setTransformMatrix(char_model_matrix);
 
-						renderer.render(this.camera.view_matrix, this.camera.projection_matrix);
+						renderer.render(this.camera.view_matrix, this.camera.projection_matrix, pass);
 					}
 				}
 			}
@@ -443,12 +445,96 @@ module.exports = {
 			}
 		},
 
+		// Compose the current scene into a 2D canvas at cap_w x cap_h and return it.
+		// Honors the transparent two-pass alpha recovery (so additive glows and
+		// particles survive on a transparent background). The GL canvas must already
+		// be sized to cap_w x cap_h with the viewport set. `alpha_mode` is 'straight'
+		// (default) or 'premultiplied' (RGB multiplied by alpha, which some AE/PS
+		// import paths expect). `pass` selects a render pass for compositing.
+		compose_capture: function(cap_w, cap_h, alpha_mode = 'straight', pass = 'beauty') {
+			const canvas = this.canvas;
+
+			const tmp = document.createElement('canvas');
+			tmp.width = cap_w;
+			tmp.height = cap_h;
+			const tctx = tmp.getContext('2d');
+
+			const is_chr = this.context.useCharacterControls;
+			const show_bg = is_chr ? core.view.config.chrShowBackground : core.view.config.modelViewerShowBackground;
+
+			// passes other than beauty force a known background and disable the
+			// regular two-pass alpha recovery (they encode their own data/matte).
+			const force_transparent = pass === 'emissive' || pass === 'alpha' || pass === 'depth' || pass === 'id';
+
+			// the alpha matte renders the full beauty scene, then turns its coverage
+			// into a grayscale luma matte; everything else renders its own pass.
+			const render_pass = pass === 'alpha' ? 'beauty' : pass;
+
+			if (show_bg && !force_transparent) {
+				// Opaque background: a single pass is exact.
+				this.draw_scene(null, render_pass);
+				tctx.drawImage(canvas, 0, 0);
+			} else {
+				// Transparent export: additive/glow effects barely write alpha, so
+				// they vanish on a transparent background. Render over black and over
+				// white, then recover straight alpha per pixel (a = 1 - (white-black))
+				// so glows survive on any background while opaque parts match the view.
+				this.draw_scene([0, 0, 0, 1], render_pass);
+				const black_ctx = document.createElement('canvas').getContext('2d');
+				black_ctx.canvas.width = cap_w;
+				black_ctx.canvas.height = cap_h;
+				black_ctx.drawImage(canvas, 0, 0);
+				const black = black_ctx.getImageData(0, 0, cap_w, cap_h).data;
+
+				this.draw_scene([1, 1, 1, 1], render_pass);
+				tctx.drawImage(canvas, 0, 0);
+				const white_img = tctx.getImageData(0, 0, cap_w, cap_h);
+				const white = white_img.data;
+
+				const premultiply = alpha_mode === 'premultiplied';
+				for (let i = 0; i < white.length; i += 4) {
+					const a = 255 - Math.max(0, Math.min(255, ((white[i] - black[i]) + (white[i + 1] - black[i + 1]) + (white[i + 2] - black[i + 2])) / 3));
+					if (a <= 0) {
+						white[i] = white[i + 1] = white[i + 2] = white[i + 3] = 0;
+						continue;
+					}
+					if (premultiply) {
+						// keep the over-black colour (already premultiplied by alpha)
+						white[i] = black[i];
+						white[i + 1] = black[i + 1];
+						white[i + 2] = black[i + 2];
+					} else {
+						white[i] = Math.min(255, black[i] * 255 / a);
+						white[i + 1] = Math.min(255, black[i + 1] * 255 / a);
+						white[i + 2] = Math.min(255, black[i + 2] * 255 / a);
+					}
+					white[i + 3] = a;
+				}
+				tctx.putImageData(white_img, 0, 0);
+
+				// alpha matte: encode coverage as an opaque grayscale luma matte
+				// (white = solid), which AE/PS use as a track matte.
+				if (pass === 'alpha') {
+					const m = tctx.getImageData(0, 0, cap_w, cap_h);
+					const d = m.data;
+					for (let i = 0; i < d.length; i += 4) {
+						const a = d[i + 3];
+						d[i] = d[i + 1] = d[i + 2] = a;
+						d[i + 3] = 255;
+					}
+					tctx.putImageData(m, 0, 0);
+				}
+			}
+
+			return { canvas: tmp, ctx: tctx };
+		},
+
 		// Render the scene at a multiple of the current resolution and return a
 		// transparent PNG data URL. Runs synchronously (resize -> draw -> read ->
 		// restore) so the browser never paints the upscaled buffer (no flicker).
 		// By default the result is cropped to the model's opaque bounds so the
 		// subject fills the frame instead of wasting resolution on empty space.
-		capture_high_res: function(scale) {
+		capture_high_res: function(scale, opts = {}) {
 			const canvas = this.canvas;
 
 			const prev_w = canvas.width;
@@ -463,59 +549,18 @@ module.exports = {
 			const cap_w = Math.max(1, Math.round(prev_w * factor));
 			const cap_h = Math.max(1, Math.round(prev_h * factor));
 
+			const alpha_mode = opts.alpha_mode || 'straight';
+			const pass = opts.pass || 'beauty';
+
 			try {
 				canvas.width = cap_w;
 				canvas.height = cap_h;
 				this.gl_context.set_viewport(cap_w, cap_h);
 
-				// Copy into a 2D canvas: the source is a WebGL canvas, so reading
-				// pixels (for cropping) requires a 2D context.
-				const tmp = document.createElement('canvas');
-				tmp.width = cap_w;
-				tmp.height = cap_h;
-				const tctx = tmp.getContext('2d');
-
-				const is_chr = this.context.useCharacterControls;
-				const show_bg = is_chr ? core.view.config.chrShowBackground : core.view.config.modelViewerShowBackground;
-
-				if (show_bg) {
-					// Opaque background: a single pass is exact.
-					this.draw_scene();
-					tctx.drawImage(canvas, 0, 0);
-				} else {
-					// Transparent export: additive/glow effects barely write alpha,
-					// so they vanish on a transparent background. Render the frame
-					// over black and over white, then recover straight alpha per
-					// pixel (a = 1 - (white - black)) so glows survive on any
-					// background while opaque parts stay identical to the viewer.
-					this.draw_scene([0, 0, 0, 1]);
-					const black_ctx = document.createElement('canvas').getContext('2d');
-					black_ctx.canvas.width = cap_w;
-					black_ctx.canvas.height = cap_h;
-					black_ctx.drawImage(canvas, 0, 0);
-					const black = black_ctx.getImageData(0, 0, cap_w, cap_h).data;
-
-					this.draw_scene([1, 1, 1, 1]);
-					tctx.drawImage(canvas, 0, 0);
-					const white_img = tctx.getImageData(0, 0, cap_w, cap_h);
-					const white = white_img.data;
-
-					for (let i = 0; i < white.length; i += 4) {
-						const a = 255 - Math.max(0, Math.min(255, ((white[i] - black[i]) + (white[i + 1] - black[i + 1]) + (white[i + 2] - black[i + 2])) / 3));
-						if (a <= 0) {
-							white[i] = white[i + 1] = white[i + 2] = white[i + 3] = 0;
-							continue;
-						}
-						white[i] = Math.min(255, black[i] * 255 / a);
-						white[i + 1] = Math.min(255, black[i + 1] * 255 / a);
-						white[i + 2] = Math.min(255, black[i + 2] * 255 / a);
-						white[i + 3] = a;
-					}
-					tctx.putImageData(white_img, 0, 0);
-				}
+				const { canvas: tmp, ctx: tctx } = this.compose_capture(cap_w, cap_h, alpha_mode, pass);
 
 				// When the background is opaque we can't crop; return as-is.
-				const should_crop = core.view.config.previewExportCrop !== false;
+				const should_crop = opts.crop ?? (core.view.config.previewExportCrop !== false);
 				const bounds = should_crop ? find_opaque_bounds(tctx, cap_w, cap_h) : null;
 				if (!bounds)
 					return tmp.toDataURL('image/png');
@@ -540,6 +585,119 @@ module.exports = {
 				canvas.width = prev_w;
 				canvas.height = prev_h;
 				this.gl_context.set_viewport(prev_w, prev_h);
+				this.draw_scene();
+			}
+		},
+
+		// Capture a frame sequence (animation playback or turntable orbit) as full,
+		// fixed-size frames so the subject never jitters between frames. Each frame
+		// is delivered to opts.on_frame(index, dataURL, total) so the caller can
+		// stream PNGs to disk without buffering the whole sequence in memory.
+		//   opts.mode        'animation' | 'turntable'
+		//   opts.frame_count number of frames to emit
+		//   opts.scale       resolution multiplier (1-4)
+		//   opts.alpha_mode  'straight' | 'premultiplied'
+		//   opts.pass        render pass (beauty/emissive/alpha/depth/id)
+		//   opts.on_frame    async (index, dataURL, total) => {}
+		//   opts.should_cancel optional () => bool
+		// Returns the number of frames written.
+		capture_sequence: async function(opts) {
+			const canvas = this.canvas;
+			const active = this.context.getActiveRenderer?.();
+			if (!active)
+				return 0;
+
+			const prev_w = canvas.width;
+			const prev_h = canvas.height;
+
+			const MAX_DIM = 8192;
+			let factor = Math.max(1, Math.min(opts.scale || 1, 4));
+			factor = Math.max(1, Math.min(factor, MAX_DIM / prev_w, MAX_DIM / prev_h));
+			const cap_w = Math.max(1, Math.round(prev_w * factor));
+			const cap_h = Math.max(1, Math.round(prev_h * factor));
+
+			const mode = opts.mode || 'animation';
+			const alpha_mode = opts.alpha_mode || 'straight';
+			const pass = opts.pass || 'beauty';
+
+			// snapshot state to restore afterwards
+			const prev_paused = active.animation_paused;
+			const prev_time = active.animation_time;
+			const prev_rot = (this.use_character_controls && this.controls && typeof this.controls.model_rotation_y === 'number')
+				? this.controls.model_rotation_y
+				: this.model_rotation_y;
+
+			const duration = active.get_animation_duration?.() ?? 0;
+
+			// frame count: explicit, or derived from fps x animation duration
+			let N = opts.frame_count | 0;
+			if (!N && mode === 'animation' && opts.fps && duration > 0)
+				N = Math.round(duration * opts.fps);
+			N = Math.max(1, N || 1);
+			const can_animate = mode === 'animation' && duration > 0 && typeof active.updateAnimation === 'function';
+
+			// reset & warm up particles so frame 0 already shows a populated spray
+			const warm_particles = () => {
+				if (active.particle_systems)
+					for (const s of active.particle_systems) s.reset?.();
+				if (can_animate) {
+					active.animation_time = 0;
+					// run ~1s of simulation in small steps before capturing
+					const steps = 30;
+					for (let k = 0; k < steps; k++) active.updateAnimation(1 / 30);
+					active.animation_time = 0;
+				}
+			};
+
+			let written = 0;
+			try {
+				canvas.width = cap_w;
+				canvas.height = cap_h;
+				this.gl_context.set_viewport(cap_w, cap_h);
+
+				if (can_animate) {
+					active.set_animation_paused?.(false);
+					warm_particles();
+				} else if (mode === 'animation') {
+					active.set_animation_paused?.(true);
+				}
+
+				const dt = can_animate ? duration / N : 0;
+
+				for (let i = 0; i < N; i++) {
+					if (opts.should_cancel?.())
+						break;
+
+					if (mode === 'turntable') {
+						const rot = prev_rot + (i / N) * Math.PI * 2;
+						active.setTransform?.([0, 0, 0], [0, rot, 0], [1, 1, 1]);
+					} else if (can_animate) {
+						// advance one frame's worth of time (animates bones + particles)
+						active.updateAnimation(dt);
+					}
+
+					const { canvas: tmp } = this.compose_capture(cap_w, cap_h, alpha_mode, pass);
+					const data_url = tmp.toDataURL('image/png');
+					await opts.on_frame(i, data_url, N);
+					written++;
+				}
+
+				return written;
+			} finally {
+				canvas.width = prev_w;
+				canvas.height = prev_h;
+				this.gl_context.set_viewport(prev_w, prev_h);
+
+				// restore animation / rotation state
+				if (mode === 'turntable') {
+					active.setTransform?.([0, 0, 0], [0, prev_rot, 0], [1, 1, 1]);
+				} else {
+					active.animation_time = prev_time;
+					active.set_animation_paused?.(prev_paused);
+				}
+				if (active.particle_systems)
+					for (const s of active.particle_systems) s.reset?.();
+
 				this.draw_scene();
 			}
 		},
@@ -612,7 +770,13 @@ module.exports = {
 
 		// Expose a high-resolution capture on the canvas so export code (which
 		// already has the canvas element) can produce supersampled screenshots.
-		canvas.captureHighRes = (scale) => this.capture_high_res(scale);
+		canvas.captureHighRes = (scale, opts) => this.capture_high_res(scale, opts);
+		canvas.captureSequence = (opts) => this.capture_sequence(opts);
+
+		// expose the live renderer + camera so designer export utilities (UV
+		// overlay, particle sheets, AE camera) can read model/camera data.
+		canvas.getActiveRenderer = () => this.context.getActiveRenderer?.();
+		canvas.getCamera = () => this.camera;
 
 		// create GL context
 		this.gl_context = new GLContext(canvas, {

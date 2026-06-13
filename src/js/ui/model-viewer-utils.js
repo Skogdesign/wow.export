@@ -299,6 +299,20 @@ const capture_canvas_png = async (core, canvas) => {
  * @returns {boolean} Success
  */
 const export_preview = async (core, format, canvas, export_name, export_subdir = '') => {
+	// designer export modes that build on the live preview
+	if (format === 'PNG_SEQUENCE')
+		return export_sequence(core, canvas, export_name, 'animation', export_subdir);
+	if (format === 'TURNTABLE')
+		return export_sequence(core, canvas, export_name, 'turntable', export_subdir);
+	if (format === 'PASSES')
+		return export_passes(core, canvas, export_name, export_subdir);
+	if (format === 'UV_OVERLAY')
+		return export_uv_overlay(core, canvas, export_name, export_subdir);
+	if (format === 'PARTICLE_SHEET')
+		return export_particle_sheet(core, canvas, export_name, export_subdir);
+	if (format === 'CAMERA_JSX')
+		return export_camera(core, canvas, export_name, export_subdir);
+
 	core.setToast('progress', 'Saving preview, hold on...', null, -1, false);
 
 	const buf = await capture_canvas_png(core, canvas);
@@ -330,6 +344,347 @@ const export_preview = async (core, format, canvas, export_name, export_subdir =
 
 	return true;
 };
+
+// Designer preview export formats handled through export_preview() (as opposed to
+// model-geometry formats like OBJ/GLTF). Tab dispatchers gate on this.
+const PREVIEW_FORMATS = ['PNG', 'CLIPBOARD', 'PNG_SEQUENCE', 'TURNTABLE', 'PASSES', 'UV_OVERLAY', 'PARTICLE_SHEET', 'CAMERA_JSX'];
+
+/**
+ * @param {string} format
+ * @returns {boolean} true if the format is a live-preview export (not geometry)
+ */
+const is_preview_format = (format) => PREVIEW_FORMATS.includes(format);
+
+/**
+ * Export the 3D preview as a numbered, transparent PNG sequence — either the
+ * current animation played through, or a 360-degree turntable orbit. The folder
+ * imports directly into After Effects as footage. Frames are full-size and fixed
+ * so the subject never jitters between frames.
+ * @param {object} core
+ * @param {HTMLCanvasElement} canvas - preview canvas (exposes captureSequence)
+ * @param {string} export_name - base name / path of the model
+ * @param {'animation'|'turntable'} mode
+ * @param {string} export_subdir
+ * @returns {Promise<boolean>}
+ */
+const export_sequence = async (core, canvas, export_name, mode, export_subdir = '') => {
+	if (typeof canvas.captureSequence !== 'function') {
+		core.setToast('error', 'Sequence export is only available for the 3D model preview. Preview a model first.', null, -1);
+		return false;
+	}
+
+	const cfg = core.view.config;
+	const fps = Math.max(1, Math.min(cfg.previewSequenceFps ?? 30, 120));
+	const scale = Math.max(1, Math.min(cfg.previewExportScale ?? 1, 4));
+	const alpha_mode = cfg.previewPremultipliedAlpha ? 'premultiplied' : 'straight';
+	const turntable_frames = Math.max(2, Math.min(cfg.previewTurntableFrames ?? 72, 720));
+
+	const base_path = export_subdir ? export_subdir + '/' + export_name : export_name;
+	const export_path = ExportHelper.getExportPath(base_path);
+	const base_no_ext = ExportHelper.replaceExtension(export_path, '');
+	const model_base = path.basename(base_no_ext);
+	const folder = base_no_ext + (mode === 'turntable' ? '_turntable' : '_sequence');
+
+	const export_paths = core.openLastExportStream();
+	let written = 0;
+
+	try {
+		core.setToast('progress', util.format('Rendering %s sequence...', mode), null, -1, false);
+
+		written = await canvas.captureSequence({
+			mode,
+			scale,
+			fps,
+			alpha_mode,
+			frame_count: mode === 'turntable' ? turntable_frames : 0,
+			on_frame: async (i, data_url, total) => {
+				const num = String(i + 1).padStart(4, '0');
+				const out_file = path.join(folder, `${model_base}_${num}.png`);
+				const buf = BufferWrapper.fromBase64(data_url.slice(data_url.indexOf(',') + 1));
+				await buf.writeToFile(out_file);
+				await export_paths?.writeLine('PNG:' + out_file);
+
+				if (i % 4 === 0 || i === total - 1)
+					core.setToast('progress', util.format('Rendering frame %d / %d...', i + 1, total), null, -1, false);
+			}
+		});
+	} catch (e) {
+		log.write('Sequence export failed: %s', e.message);
+		core.setToast('error', util.format('Sequence export failed: %s', e.message), null, -1);
+		export_paths?.close();
+		return false;
+	}
+
+	export_paths?.close();
+
+	log.write('Exported %d-frame %s sequence to %s (%d fps)', written, mode, folder, fps);
+	core.setToast('success',
+		util.format('Exported %d frames to %s. In After Effects, import the folder as a PNG sequence at %d fps.', written, folder, fps),
+		{ 'View in Explorer': () => nw.Shell.openItem(folder) }, -1);
+
+	return true;
+};
+
+/**
+ * Export render passes of the current preview frame as separate, pixel-aligned
+ * PNGs for compositing in Photoshop / After Effects:
+ *   _beauty   - the full lit render (transparent)
+ *   _emissive - additive glow + particles only (drop in Screen/Add)
+ *   _matte    - grayscale coverage matte (use as a luma track matte)
+ * All passes share identical, uncropped framing so they line up exactly.
+ * @param {object} core
+ * @param {HTMLCanvasElement} canvas - preview canvas (exposes captureHighRes)
+ * @param {string} export_name
+ * @param {string} export_subdir
+ * @returns {Promise<boolean>}
+ */
+const export_passes = async (core, canvas, export_name, export_subdir = '') => {
+	if (typeof canvas.captureHighRes !== 'function') {
+		core.setToast('error', 'Render-pass export is only available for the 3D model preview. Preview a model first.', null, -1);
+		return false;
+	}
+
+	const cfg = core.view.config;
+	const scale = Math.max(1, Math.min(cfg.previewExportScale ?? 1, 4));
+	const alpha_mode = cfg.previewPremultipliedAlpha ? 'premultiplied' : 'straight';
+
+	const base_path = export_subdir ? export_subdir + '/' + export_name : export_name;
+	const export_path = ExportHelper.getExportPath(base_path);
+	const base_no_ext = ExportHelper.replaceExtension(export_path, '');
+
+	// [file suffix, render pass]
+	const passes = [['beauty', 'beauty'], ['emissive', 'emissive'], ['matte', 'alpha']];
+	const export_paths = core.openLastExportStream();
+	let n = 0;
+
+	try {
+		for (const [suffix, pass] of passes) {
+			core.setToast('progress', util.format('Rendering %s pass...', suffix), null, -1, false);
+
+			// crop:false keeps every pass full-frame so they composite aligned
+			const data_url = canvas.captureHighRes(scale, { alpha_mode, pass, crop: false });
+			const out_file = base_no_ext + '_' + suffix + '.png';
+			const buf = BufferWrapper.fromBase64(data_url.slice(data_url.indexOf(',') + 1));
+			await buf.writeToFile(out_file);
+			await export_paths?.writeLine('PNG:' + out_file);
+			n++;
+		}
+	} catch (e) {
+		log.write('Render-pass export failed: %s', e.message);
+		core.setToast('error', util.format('Render-pass export failed: %s', e.message), null, -1);
+		export_paths?.close();
+		return false;
+	}
+
+	export_paths?.close();
+
+	const out_dir = path.dirname(base_no_ext);
+	log.write('Exported %d render passes for %s', n, export_name);
+	core.setToast('success',
+		util.format('Exported %d render passes (beauty, emissive, matte) to %s.', n, out_dir),
+		{ 'View in Explorer': () => nw.Shell.openItem(out_dir) }, -1);
+
+	return true;
+};
+
+/**
+ * Render the active model's UV layout to a transparent PNG (wireframe over a
+ * texture-sized canvas) so designers can paint aligned custom skins in Photoshop.
+ * @param {object} core
+ * @param {HTMLCanvasElement} canvas - preview canvas (exposes getActiveRenderer)
+ * @param {string} export_name
+ * @param {string} export_subdir
+ * @returns {Promise<boolean>}
+ */
+const export_uv_overlay = async (core, canvas, export_name, export_subdir = '') => {
+	const renderer = canvas.getActiveRenderer?.();
+	const m2 = renderer?.m2;
+	const skin = m2?.skins?.[0];
+	if (!m2 || !m2.uv || !skin || !skin.triangles) {
+		core.setToast('error', 'UV overlay is only available for M2 model previews. Preview a model first.', null, -1);
+		return false;
+	}
+
+	const size = Math.max(256, Math.min(core.view.config.uvOverlaySize ?? 2048, 4096));
+	const cv = document.createElement('canvas');
+	cv.width = cv.height = size;
+	const ctx = cv.getContext('2d');
+	ctx.strokeStyle = 'rgba(0, 220, 255, 0.85)';
+	ctx.lineWidth = Math.max(1, size / 2048);
+
+	const uv = m2.uv;
+	const tris = skin.triangles;
+	const indices = skin.indices;
+
+	ctx.beginPath();
+	for (let i = 0; i + 2 < tris.length; i += 3) {
+		const a = indices[tris[i]], b = indices[tris[i + 1]], c = indices[tris[i + 2]];
+		const ax = uv[a * 2] * size, ay = uv[a * 2 + 1] * size;
+		const bx = uv[b * 2] * size, by = uv[b * 2 + 1] * size;
+		const cx = uv[c * 2] * size, cy = uv[c * 2 + 1] * size;
+		ctx.moveTo(ax, ay); ctx.lineTo(bx, by);
+		ctx.lineTo(cx, cy); ctx.lineTo(ax, ay);
+	}
+	ctx.stroke();
+
+	const base_path = export_subdir ? export_subdir + '/' + export_name : export_name;
+	const out_file = ExportHelper.replaceExtension(ExportHelper.getExportPath(base_path), '') + '_uv.png';
+	const data_url = cv.toDataURL('image/png');
+	const buf = BufferWrapper.fromBase64(data_url.slice(data_url.indexOf(',') + 1));
+	await buf.writeToFile(out_file);
+
+	const export_paths = core.openLastExportStream();
+	await export_paths?.writeLine('PNG:' + out_file);
+	export_paths?.close();
+
+	log.write('Exported UV overlay to %s', out_file);
+	core.setToast('success', util.format('Exported UV layout to %s', out_file), { 'View in Explorer': () => nw.Shell.openItem(path.dirname(out_file)) }, -1);
+	return true;
+};
+
+/**
+ * Export the texture sheet(s) used by the active model's particle emitters as
+ * PNGs (named with their flipbook columns x rows) so designers can rebuild the
+ * same effects in After Effects / Photoshop.
+ * @param {object} core
+ * @param {HTMLCanvasElement} canvas
+ * @param {string} export_name
+ * @param {string} export_subdir
+ * @returns {Promise<boolean>}
+ */
+const export_particle_sheet = async (core, canvas, export_name, export_subdir = '') => {
+	const m2 = canvas.getActiveRenderer?.()?.m2;
+	if (!m2 || !m2.particleEmitters || m2.particleEmitters.length === 0) {
+		core.setToast('error', 'This model has no particle emitters to export.', null, -1);
+		return false;
+	}
+
+	const base_path = export_subdir ? export_subdir + '/' + export_name : export_name;
+	const base_no_ext = ExportHelper.replaceExtension(ExportHelper.getExportPath(base_path), '');
+	const folder = base_no_ext + '_particles';
+
+	const export_paths = core.openLastExportStream();
+	const seen = new Set();
+	let n = 0;
+
+	try {
+		for (const e of m2.particleEmitters) {
+			// decode multi-texture packing (matches ParticleEmitter)
+			const multi = (e.flags & 0x10000000) !== 0;
+			const idx = multi ? (e.texture & 0x1F) : e.texture;
+			const tex = m2.textures?.[idx];
+			const fdid = tex?.fileDataID;
+			if (!fdid || seen.has(fdid))
+				continue;
+			seen.add(fdid);
+
+			try {
+				const data = await core.view.casc.getFile(fdid);
+				const blp = new BLPFile(data);
+				const cols = Math.max(1, e.textureDimensionsColumns | 0);
+				const rows = Math.max(1, e.textureDimensionsRows | 0);
+				const out_file = path.join(folder, util.format('particle_%d_%dx%d.png', fdid, cols, rows));
+				const data_url = blp.getDataURL(0b0111);
+				const buf = BufferWrapper.fromBase64(data_url.slice(data_url.indexOf(',') + 1));
+				await buf.writeToFile(out_file);
+				await export_paths?.writeLine('PNG:' + out_file);
+				n++;
+			} catch (err) {
+				log.write('Failed to export particle texture %d: %s', fdid, err.message);
+			}
+		}
+	} finally {
+		export_paths?.close();
+	}
+
+	if (n === 0) {
+		core.setToast('error', 'Could not export any particle textures for this model.', null, -1);
+		return false;
+	}
+
+	log.write('Exported %d particle texture sheet(s) to %s', n, folder);
+	core.setToast('success', util.format('Exported %d particle sheet(s) to %s', n, folder), { 'View in Explorer': () => nw.Shell.openItem(folder) }, -1);
+	return true;
+};
+
+/**
+ * Export the current viewer camera for After Effects: a JSON with exact camera
+ * parameters (reliable for any DCC) plus a convenience .jsx that builds a matching
+ * AE camera. Pairs with a turntable sequence (model rotates under a fixed camera).
+ * @param {object} core
+ * @param {HTMLCanvasElement} canvas
+ * @param {string} export_name
+ * @param {string} export_subdir
+ * @returns {Promise<boolean>}
+ */
+const export_camera = async (core, canvas, export_name, export_subdir = '') => {
+	const cam = canvas.getCamera?.();
+	if (!cam) {
+		core.setToast('error', 'Camera export is only available for the 3D model preview.', null, -1);
+		return false;
+	}
+
+	const fsp = require('fs').promises;
+	const res_w = canvas.width, res_h = canvas.height;
+	const data = {
+		generator: 'wow.export',
+		coordinate_system: 'WoW/GL right-handed: +X right, +Y up, -Z forward; units approximately in-game yards',
+		position: Array.from(cam.position),
+		target: Array.from(cam.target),
+		up: Array.from(cam.up),
+		fov_vertical_degrees: cam.fov,
+		aspect: cam.aspect,
+		near: cam.near,
+		far: cam.far,
+		resolution: [res_w, res_h]
+	};
+
+	const base_path = export_subdir ? export_subdir + '/' + export_name : export_name;
+	const base_no_ext = ExportHelper.replaceExtension(ExportHelper.getExportPath(base_path), '');
+	const json_file = base_no_ext + '_camera.json';
+	const jsx_file = base_no_ext + '_camera.jsx';
+
+	await fsp.mkdir(path.dirname(json_file), { recursive: true });
+	await fsp.writeFile(json_file, JSON.stringify(data, null, '\t'));
+
+	// AE ExtendScript: builds a camera in the active comp. AE is left-handed with
+	// Y pointing down, so Y/Z are flipped from WoW space. Distances are scaled to
+	// comp pixels via the vertical FOV so framing matches the rendered sequence.
+	const jsx = [
+		'// wow.export camera import for After Effects.',
+		'// Select a composition (matching the exported resolution) and run this script.',
+		'(function () {',
+		'\tvar comp = app.project.activeItem;',
+		'\tif (!(comp && comp instanceof CompItem)) { alert("Select a composition first."); return; }',
+		'\tapp.beginUndoGroup("wow.export camera");',
+		'\tvar fovV = ' + cam.fov + ';',
+		'\tvar zoom = (comp.height / 2) / Math.tan(fovV * Math.PI / 360);',
+		'\tvar cam = comp.layers.addCamera("wow.export Camera", [comp.width / 2, comp.height / 2]);',
+		'\tcam.property("Zoom").setValue(zoom);',
+		'\t// WoW position (yards) -> AE (pixels), Y and Z negated for AE handedness.',
+		'\tvar scale = zoom / ' + Math.max(0.0001, distance(cam.position, cam.target)) + ';',
+		'\tvar p = [' + cam.position[0] + ', ' + cam.position[1] + ', ' + cam.position[2] + '];',
+		'\tvar t = [' + cam.target[0] + ', ' + cam.target[1] + ', ' + cam.target[2] + '];',
+		'\tcam.property("Position").setValue([comp.width/2 + p[0]*scale, comp.height/2 - p[1]*scale, -p[2]*scale]);',
+		'\tcam.property("Point of Interest").setValue([comp.width/2 + t[0]*scale, comp.height/2 - t[1]*scale, -t[2]*scale]);',
+		'\tapp.endUndoGroup();',
+		'})();',
+		''
+	].join('\n');
+
+	await fsp.writeFile(jsx_file, jsx);
+
+	const export_paths = core.openLastExportStream();
+	await export_paths?.writeLine('JSON:' + json_file);
+	export_paths?.close();
+
+	log.write('Exported camera data to %s (+ AE .jsx)', json_file);
+	core.setToast('success', util.format('Exported camera to %s (JSON + After Effects .jsx)', path.dirname(json_file)), { 'View in Explorer': () => nw.Shell.openItem(path.dirname(json_file)) }, -1);
+	return true;
+};
+
+// straight-line distance between two 3-vectors (used for the AE camera scale)
+const distance = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 
 /**
  * Export a model file.
@@ -575,6 +930,8 @@ module.exports = {
 	handle_animation_change,
 	capture_canvas_png,
 	export_preview,
+	export_sequence,
+	is_preview_format,
 	export_model,
 	create_animation_methods,
 	create_view_state

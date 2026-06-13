@@ -766,7 +766,7 @@ const export_files = async (core, entries) => {
 	const export_paths = core.openLastExportStream();
 	const format = core.view.config.exportCreatureFormat;
 
-	if (format === 'PNG' || format === 'CLIPBOARD') {
+	if (modelViewerUtils.is_preview_format(format)) {
 		if (active_file_data_id) {
 			const canvas = document.getElementById('creature-preview').querySelector('canvas');
 			const export_name = ExportHelper.sanitizeFilename(active_creature?.name ?? 'creature_' + active_file_data_id);
@@ -1168,7 +1168,7 @@ const export_model_files = async (core, files, is_local = false) => {
 	const export_paths = core.openLastExportStream();
 	const format = core.view.config.exportModelFormat;
 
-	if (format === 'PNG' || format === 'CLIPBOARD') {
+	if (modelViewerUtils.is_preview_format(format)) {
 		if (active_model_path) {
 			const canvas = document.getElementById('creature-preview').querySelector('canvas');
 			await modelViewerUtils.export_preview(core, format, canvas, active_model_path);
@@ -1372,6 +1372,10 @@ module.exports = {
 					<label class="ui-checkbox" title="Show a grid in the 3D viewport">
 						<input type="checkbox" v-model="$core.view.config.modelViewerShowGrid"/>
 						<span>Show Grid</span>
+					</label>
+					<label class="ui-checkbox" title="Render particle effects (spell glows, flames, smoke) on the model">
+						<input type="checkbox" v-model="$core.view.config.modelViewerShowParticles"/>
+						<span>Show Particles</span>
 					</label>
 					<label class="ui-checkbox" title="Render the preview model as a wireframe">
 						<input type="checkbox" v-model="$core.view.config.modelViewerWireframe"/>
