@@ -2860,6 +2860,21 @@ input[type=number]::-webkit-outer-spin-button {
 	color: #ffffff;
 	font-weight: bold;
 }
+.list-container .list-status .quick-filters .added-since-select {
+	background: var(--background-dark);
+	color: #57afe2;
+	border: 1px solid var(--border);
+	border-radius: 3px;
+	font-size: inherit;
+	padding: 0 2px;
+	cursor: pointer;
+	max-width: 220px;
+}
+.list-container .list-status .quick-filters .added-since-select.active {
+	color: #ffffff;
+	border-color: #57afe2;
+	font-weight: bold;
+}
 .list-container .ui-listbox {
 	position: absolute;
 	top: 0;

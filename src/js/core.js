@@ -74,6 +74,8 @@ const makeNewView = () => {
 		legacyModelQuickFilters: ['m2', 'mdx', 'wmo'], // Quick filter configuration for legacy models tab.
 		audioQuickFilters: ['ogg', 'mp3', 'unk'], // Quick filter configuration for audio tab.
 		textQuickFilters: ['lua', 'xml', 'txt', 'sbt', 'wtf', 'htm', 'toc', 'xsd', 'srt'], // Quick filter configuration for text tab.
+		buildSnapshots: [], // Earlier builds available to diff against for the "Added since" filter ([{ name, count, time }]).
+		addedSinceBuild: null, // Build name the file lists are currently filtered against ("added since"), or null when off.
 		selectionTextures: [], // Current user selection of texture files.
 		selectionModels: [], // Current user selection of models.
 		selectionSounds: [], // Current user selection of sounds.

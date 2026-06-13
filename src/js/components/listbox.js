@@ -6,6 +6,7 @@
 
 const path = require('path');
 const core = require('../core');
+const buildSnapshots = require('../casc/build-snapshots');
 
 const FILTER_DEBOUNCE_MS = 200;
 
@@ -187,6 +188,20 @@ module.exports = {
 		},
 
 		/**
+		 * Earlier builds available for the "Added since" filter.
+		 */
+		addedSinceOptions: function() {
+			return core.view.buildSnapshots || [];
+		},
+
+		/**
+		 * Currently-selected "Added since" build (empty string when off).
+		 */
+		addedSinceValue: function() {
+			return core.view.addedSinceBuild || '';
+		},
+
+		/**
 		 * Total amount of scrollable rows in the current view mode.
 		 */
 		rowCount: function() {
@@ -306,6 +321,15 @@ module.exports = {
 			if (this.activeQuickFilter) {
 				const pattern = new RegExp(`\\.${this.activeQuickFilter.toLowerCase()}(\\s\\[\\d+\\])?$`, 'i');
 				res = res.filter(e => e.match(pattern));
+			}
+
+			// apply "added since" build filter (reading addedSinceBuild keeps this
+			// reactive; the matching set is precomputed in build-snapshots)
+			if (core.view.addedSinceBuild && buildSnapshots.is_active()) {
+				res = res.filter(e => {
+					const fid = parseInt(fid_filter(e));
+					return Number.isFinite(fid) && buildSnapshots.is_added(fid);
+				});
 			}
 
 			let hasChanges = false;
@@ -585,6 +609,23 @@ module.exports = {
 		},
 
 		/**
+		 * Invoked when the "Added since" build is changed. Computes the set of
+		 * files added since that build before arming the filter, so the list
+		 * re-renders against a ready set.
+		 * @param {string} buildName - Selected build, or '' to disable.
+		 */
+		applyAddedSince: async function(buildName) {
+			if (!buildName) {
+				buildSnapshots.clear();
+				core.view.addedSinceBuild = null;
+				return;
+			}
+
+			await buildSnapshots.compute_added_since(buildName);
+			core.view.addedSinceBuild = buildName;
+		},
+
+		/**
 		 * Toggles between flat list and hierarchical tree view.
 		 * Persisted globally via configuration.
 		 */
@@ -665,7 +706,7 @@ module.exports = {
 	<div class="list-status with-quick-filters" v-if="unittype">
 		<span>{{ filteredItems.length }} {{ unittype + (filteredItems.length != 1 ? 's' : '') }} found. {{ selection.length > 0 ? ' (' + selection.length + ' selected)' : '' }}</span>
 		<span class="quick-filters">
-			<a @click="toggleTreeMode" :class="{ active: treeMode }">Tree view</a><template v-if="quickfilters && quickfilters.length > 0"><span> · </span>
+			<a @click="toggleTreeMode" :class="{ active: treeMode }">Tree view</a><span> · </span><select class="added-since-select" :class="{ active: addedSinceValue }" :value="addedSinceValue" @change="applyAddedSince($event.target.value)" :title="addedSinceOptions.length > 0 ? 'Show only files added since an earlier build you have opened' : 'Open another build once to compare what changed'"><option value="">Added since: off</option><option v-if="addedSinceOptions.length === 0" value="" disabled>(open another build to compare)</option><option v-for="s in addedSinceOptions" :key="s.name" :value="s.name">Added since {{ s.name }}</option></select><template v-if="quickfilters && quickfilters.length > 0"><span> · </span>
 			Quick filter: <template v-for="(ext, index) in quickfilters" :key="ext"><a @click="applyQuickFilter(ext)" :class="{ active: activeQuickFilter === ext }">{{ ext.toUpperCase() }}</a><span v-if="index < quickfilters.length - 1"> / </span></template></template>
 		</span>
 	</div></div>`

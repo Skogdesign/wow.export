@@ -5,6 +5,7 @@
  */
 const BLTEReader = require('./blte-reader').BLTEReader;
 const listfile = require('./listfile');
+const buildSnapshots = require('./build-snapshots');
 const dbd_manifest = require('./dbd-manifest');
 const log = require('../log');
 const core = require('../core');
@@ -282,6 +283,14 @@ class CASC {
 	async loadListfile(buildKey) {
 		await core.progressLoadingScreen('Loading listfiles');
 		listfile.applyPreload(this.rootEntries);
+
+		// Record this build's file set and refresh the list of earlier builds
+		// available to diff against for the "Added since…" filter.
+		const buildName = this.getBuildName();
+		await buildSnapshots.capture(buildName, this.rootEntries);
+		core.view.buildSnapshots = await buildSnapshots.list(buildName);
+		core.view.addedSinceBuild = null;
+		buildSnapshots.clear();
 	}
 
 	/**

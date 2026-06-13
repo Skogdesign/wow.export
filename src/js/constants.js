@@ -85,6 +85,7 @@ module.exports = {
 		DIR_DATA: path.join(DATA_PATH, 'casc', 'data'), // Cache for single data files.
 		DIR_DBD: path.join(DATA_PATH, 'casc', 'dbd'), // Cache for DBD files.
 		DIR_LISTFILE: path.join(DATA_PATH, 'casc', 'listfile'), // Master listfile cache directory.
+		DIR_SNAPSHOTS: path.join(DATA_PATH, 'casc', 'build-snapshots'), // Per-build file-set snapshots for the "added since" filter.
 		BUILD_MANIFEST: 'manifest.json', // Build-specific manifest file.
 		BUILD_LISTFILE: 'listfile', // Build-specific listfile file.
 		BUILD_ENCODING: 'encoding', // Build-specific encoding file.
