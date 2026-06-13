@@ -12,6 +12,7 @@ const BLPFile = require('../../casc/blp');
 const M2Loader = require('../loaders/M2Loader');
 const SKELLoader = require('../loaders/SKELLoader');
 const ParticleEmitter = require('../ParticleEmitter');
+const pbrMaps = require('../pbr-maps');
 const GeosetMapper = require('../GeosetMapper');
 const ShaderMapper = require('../ShaderMapper');
 const Shaders = require('../Shaders');
@@ -403,6 +404,13 @@ class M2RendererGL {
 		this.particle_systems = [];
 		this.particle_vao = null;
 		this.particle_vbo = null;
+
+		// synthetic PBR normal maps per diffuse texture index (roughness/AO are
+		// computed live in the shader, so no ORM texture is needed for the viewer)
+		this.pbr_normal = new Map();
+		this.default_pbr_normal = null;
+		this.pbr_watcher = null;
+		this.pbr_generated = false; // one-shot guard (true even if all textures fail)
 	}
 
 	/**
@@ -427,6 +435,11 @@ class M2RendererGL {
 
 		// load textures
 		await this._load_textures();
+
+		// synthetic PBR maps (generated up-front when enabled)
+		if (core.view.config.modelViewerPBR)
+			await this._ensure_pbr_textures();
+
 		this.global_seq_times = new Float32Array(this.m2.globalLoops.length);
 		this.submesh_colors = new Float32Array(this.m2.colors.length * 4);
 		this.tex_weights = new Float32Array(this.m2.textureWeights.length);
@@ -446,6 +459,12 @@ class M2RendererGL {
 				this.geosetWatcher = core.view.$watch(this.geosetKey, () => this.updateGeosets(), { deep: true });
 				this.wireframeWatcher = core.view.$watch('config.modelViewerWireframe', () => {}, { deep: true });
 				this.bonesWatcher = core.view.$watch('config.modelViewerShowBones', () => {}, { deep: true });
+
+				// generate PBR maps on demand when the toggle is switched on
+				this.pbr_watcher = core.view.$watch('config.modelViewerPBR', async (enabled) => {
+					if (enabled)
+						await this._ensure_pbr_textures();
+				});
 			}
 		}
 
@@ -461,6 +480,59 @@ class M2RendererGL {
 
 		this.default_texture = new GLTexture(this.ctx);
 		this.default_texture.set_rgba(pixels, 1, 1, { has_alpha: false });
+
+		// fallback flat normal map for textures without a generated map
+		this.default_pbr_normal = new GLTexture(this.ctx);
+		this.default_pbr_normal.set_rgba(new Uint8Array([128, 128, 255, 255]), 1, 1, { has_alpha: false });
+	}
+
+	/**
+	 * Generate synthetic normal + ORM GL textures from each loaded diffuse texture.
+	 * Idempotent; re-fetches the BLPs so it also works when PBR is toggled on at
+	 * runtime (CASC caches the files, so this is cheap on the second pass).
+	 */
+	async _ensure_pbr_textures() {
+		// one-shot: bail if already attempted (even if every texture failed) and
+		// skip the character viewer, whose textures are runtime composites (set via
+		// set_canvas) rather than BLP files this approach can read.
+		if (this.pbr_generated || !this.m2?.textures || this.ctx.cameraRelativeLight)
+			return;
+
+		this.pbr_generated = true;
+
+		// the normal map is baked at unit strength; the live shader uniform
+		// (u_pbr_normal_strength, driven by the slider) is the actual control.
+		for (let i = 0; i < this.m2.textures.length; i++) {
+			const texture = this.m2.textures[i];
+			if (!this.textures.has(i) || !texture?.fileDataID || texture.fileDataID <= 0)
+				continue;
+
+			try {
+				// getTextureFile() returns a cached buffer whose offset was already
+				// advanced by the diffuse load; rewind before re-parsing it as BLP.
+				const data = await texture.getTextureFile();
+				data.seek(0);
+				const blp = new BLPFile(data);
+				const canvas = blp.toCanvas(0b0111);
+				const img = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height);
+
+				const normal = pbrMaps.generate_normal_map(
+					{ data: img.data, width: img.width, height: img.height }, { normalStrength: 1.0 });
+
+				const ntex = new GLTexture(this.ctx);
+				ntex.set_rgba(normal.data, normal.width, normal.height, { generate_mipmaps: true });
+				this.pbr_normal.set(i, ntex);
+			} catch (e) {
+				log.write('Failed to generate PBR normal map for texture %d: %s', texture.fileDataID, e.message);
+			}
+		}
+	}
+
+	/** Dispose generated PBR GL textures (keeps the 1x1 default). */
+	_dispose_pbr_textures() {
+		for (const t of this.pbr_normal.values()) t.dispose();
+		this.pbr_normal.clear();
+		this.pbr_generated = false;
 	}
 
 	async _load_textures() {
@@ -1638,6 +1710,15 @@ class M2RendererGL {
 		shader.set_uniform_1i('u_texture3', 2);
 		shader.set_uniform_1i('u_texture4', 3);
 
+		// synthetic PBR (only active for the beauty pass; never for matte/emissive).
+		// strengths are live uniforms driven by the viewer sliders.
+		const pbr_enabled = pass === 'beauty' && cfg.modelViewerPBR && this.pbr_normal.size > 0;
+		shader.set_uniform_1i('u_pbr_enabled', pbr_enabled ? 1 : 0);
+		shader.set_uniform_1i('u_normal_map', 4);
+		shader.set_uniform_1f('u_pbr_normal_strength', cfg.pbrNormalStrength ?? 2.5);
+		shader.set_uniform_1f('u_pbr_roughness', cfg.pbrRoughness ?? 0.7);
+		shader.set_uniform_1f('u_pbr_ao_strength', cfg.pbrAOStrength ?? 0.5);
+
 		// default texture weights
 		shader.set_uniform_3f('u_tex_sample_alpha', 1, 1, 1);
 
@@ -1722,6 +1803,12 @@ class M2RendererGL {
 				const tex_idx = dc.tex_indices[t];
 				const texture = (tex_idx !== null) ? (this.textures.get(tex_idx) || this.default_texture) : this.default_texture;
 				texture.bind(t);
+			}
+
+			// bind the primary texture's normal map (unit 4) when PBR is active
+			if (pbr_enabled) {
+				const pti = dc.tex_indices[0];
+				(this.pbr_normal.get(pti) || this.default_pbr_normal).bind(4);
 			}
 
 			// draw
@@ -2142,6 +2229,12 @@ class M2RendererGL {
 		}
 		this.particle_vbo = null;
 		this.particle_systems = [];
+
+		// dispose PBR maps
+		this.pbr_watcher?.();
+		this._dispose_pbr_textures();
+		this.default_pbr_normal?.dispose();
+		this.default_pbr_normal = null;
 
 		// dispose textures
 		for (const tex of this.textures.values())

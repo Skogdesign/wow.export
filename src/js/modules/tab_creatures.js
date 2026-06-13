@@ -1377,6 +1377,24 @@ module.exports = {
 						<input type="checkbox" v-model="$core.view.config.modelViewerShowParticles"/>
 						<span>Show Particles</span>
 					</label>
+					<label class="ui-checkbox" title="Synthetic normal/roughness/AO shading derived from the diffuse texture">
+						<input type="checkbox" v-model="$core.view.config.modelViewerPBR"/>
+						<span>PBR Shading</span>
+					</label>
+					<template v-if="$core.view.config.modelViewerPBR">
+						<div class="light-control">
+							<span class="prefix-label">Normal: {{ $core.view.config.pbrNormalStrength.toFixed(1) }}</span>
+							<input type="range" min="0" max="6" step="0.1" v-model.number="$core.view.config.pbrNormalStrength"/>
+						</div>
+						<div class="light-control">
+							<span class="prefix-label">Roughness: {{ $core.view.config.pbrRoughness.toFixed(2) }}</span>
+							<input type="range" min="0.04" max="1" step="0.02" v-model.number="$core.view.config.pbrRoughness"/>
+						</div>
+						<div class="light-control">
+							<span class="prefix-label">AO: {{ $core.view.config.pbrAOStrength.toFixed(2) }}</span>
+							<input type="range" min="0" max="1" step="0.05" v-model.number="$core.view.config.pbrAOStrength"/>
+						</div>
+					</template>
 					<label class="ui-checkbox" title="Render the preview model as a wireframe">
 						<input type="checkbox" v-model="$core.view.config.modelViewerWireframe"/>
 						<span>Show Wireframe</span>

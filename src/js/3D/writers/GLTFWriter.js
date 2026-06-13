@@ -931,7 +931,8 @@ class GLTFWriter {
 			}
 
 			root.textures.push({ source: imageIndex });
-			root.materials.push({
+
+			const material = {
 				name: path.basename(texFile.matName, path.extname(texFile.matName)),
 				emissiveFactor: [0, 0, 0],
 				pbrMetallicRoughness: {
@@ -940,7 +941,27 @@ class GLTFWriter {
 					},
 					metallicFactor: 0
 				}
-			});
+			};
+
+			// optional synthetic PBR maps (uri/gltf mode only). The packed ORM image
+			// supplies roughness/metallic (G/B) and occlusion (R) from one texture.
+			const resolve_uri = (rel) => use_absolute ? path.resolve(out_dir, rel) : rel;
+
+			if (texFile.normalPathRelative) {
+				const ni = root.images.push({ uri: resolve_uri(texFile.normalPathRelative) }) - 1;
+				const nt = root.textures.push({ source: ni }) - 1;
+				material.normalTexture = { index: nt };
+			}
+
+			if (texFile.ormPathRelative) {
+				const oi = root.images.push({ uri: resolve_uri(texFile.ormPathRelative) }) - 1;
+				const ot = root.textures.push({ source: oi }) - 1;
+				material.pbrMetallicRoughness.metallicRoughnessTexture = { index: ot };
+				material.pbrMetallicRoughness.roughnessFactor = 1;
+				material.occlusionTexture = { index: ot };
+			}
+
+			root.materials.push(material);
 
 			materialMap.set(texFile.matName, materialIndex);
 		}

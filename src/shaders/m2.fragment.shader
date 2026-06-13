@@ -29,6 +29,15 @@ uniform vec3 u_diffuse_color;
 uniform vec3 u_light_dir;
 uniform int u_apply_lighting;
 
+// synthetic PBR (normal map derived from the diffuse; roughness/AO computed live
+// from the diffuse luminance). Disabled by default. All three strengths are live
+// shader uniforms so the viewer sliders update instantly without regenerating.
+uniform int u_pbr_enabled;
+uniform sampler2D u_normal_map;
+uniform float u_pbr_normal_strength;
+uniform float u_pbr_roughness;
+uniform float u_pbr_ao_strength;
+
 // wireframe mode
 uniform int u_wireframe;
 uniform vec4 u_wireframe_color;
@@ -48,6 +57,49 @@ vec3 calc_lighting(vec3 color, vec3 normal) {
 	vec3 diffuse = u_diffuse_color * color * n_dot_l;
 
 	return ambient + diffuse;
+}
+
+// derive a tangent frame from screen-space derivatives (no per-vertex tangents)
+// and perturb the geometric normal by the sampled normal map. View space.
+vec3 perturb_normal(vec3 N, vec3 view_pos, vec2 uv) {
+	vec3 dp1 = dFdx(view_pos);
+	vec3 dp2 = dFdy(view_pos);
+	vec2 duv1 = dFdx(uv);
+	vec2 duv2 = dFdy(uv);
+
+	vec3 dp2perp = cross(dp2, N);
+	vec3 dp1perp = cross(N, dp1);
+	vec3 T = dp2perp * duv1.x + dp1perp * duv2.x;
+	vec3 B = dp2perp * duv1.y + dp1perp * duv2.y;
+
+	float inv_max = inversesqrt(max(dot(T, T), dot(B, B)));
+	mat3 TBN = mat3(T * inv_max, B * inv_max, N);
+
+	vec3 map = texture(u_normal_map, uv).xyz * 2.0 - 1.0;
+	map.xy *= u_pbr_normal_strength;
+	return normalize(TBN * map);
+}
+
+// roughness/AO-aware lighting using the perturbed normal
+vec3 calc_pbr_lighting(vec3 color, vec3 N, float roughness, float ao) {
+	if (u_apply_lighting == 0)
+		return color;
+
+	vec3 L = normalize(-u_light_dir);
+	vec3 V = normalize(-v_position_view);
+	float n_dot_l = max(dot(N, L), 0.0);
+
+	vec3 ambient = u_ambient_color * color * ao;
+	vec3 diffuse = u_diffuse_color * color * n_dot_l;
+
+	// Blinn-Phong specular, sharpness driven by roughness
+	vec3 H = normalize(L + V);
+	float n_dot_h = max(dot(N, H), 0.0);
+	float shininess = mix(96.0, 4.0, roughness);
+	float spec = pow(n_dot_h, shininess) * (1.0 - roughness);
+	vec3 specular = u_diffuse_color * spec * n_dot_l;
+
+	return ambient + diffuse + specular;
 }
 
 void main() {
@@ -345,7 +397,20 @@ void main() {
 		discard;
 
 	// apply lighting
-	vec3 lit_color = calc_lighting(mat_diffuse, v_normal);
+	vec3 lit_color;
+	if (u_pbr_enabled != 0) {
+		vec3 N = perturb_normal(normalize(v_normal), v_position_view, uv1);
+
+		// roughness/AO derived live from the diffuse luminance (matches the baked
+		// ORM used for export): darker areas read rougher and more occluded.
+		float lum = dot(tex1.rgb, vec3(0.299, 0.587, 0.114));
+		float rough = clamp(u_pbr_roughness + (0.5 - lum) * 0.3, 0.04, 1.0);
+		float ao = clamp(1.0 - (1.0 - lum) * u_pbr_ao_strength, 0.0, 1.0);
+
+		lit_color = calc_pbr_lighting(mat_diffuse, N, rough, ao);
+	} else {
+		lit_color = calc_lighting(mat_diffuse, v_normal);
+	}
 
 	// add specular (disabled for debugging)
 	// lit_color += specular;

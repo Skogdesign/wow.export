@@ -21,9 +21,50 @@ const GeosetMapper = require('../GeosetMapper');
 const ExportHelper = require('../../casc/export-helper');
 const BufferWrapper = require('../../buffer');
 const ParticleEmitter = require('../ParticleEmitter');
+const pbrMaps = require('../pbr-maps');
 
 // identity matrix reused for the headless particle snapshot
 const PARTICLE_IDENTITY = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+
+/**
+ * Generate synthetic normal + packed-ORM maps from a diffuse BLP and write them
+ * next to the diffuse PNG. Returns the relative filenames for the glTF material.
+ * @param {BLPFile} blp
+ * @param {string} texPath - absolute path of the written diffuse PNG
+ * @param {string} texFileRel - relative path/filename of the diffuse PNG
+ * @returns {Promise<{normalRel:string, ormRel:string}|null>}
+ */
+async function write_pbr_maps(blp, texPath, texFileRel) {
+	const cfg = core.view.config;
+	const canvas = blp.toCanvas(0b0111);
+	const ctx = canvas.getContext('2d');
+	const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
+	const opts = {
+		normalStrength: cfg.pbrNormalStrength,
+		roughnessBase: cfg.pbrRoughness,
+		aoStrength: cfg.pbrAOStrength
+	};
+	const { normal, orm } = pbrMaps.generate_pbr_maps({ data: img.data, width: img.width, height: img.height }, opts);
+
+	const base = texPath.replace(/\.png$/i, '');
+	await write_imagedata_png(normal, base + '_n.png');
+	await write_imagedata_png(orm, base + '_orm.png');
+
+	return {
+		normalRel: texFileRel.replace(/\.png$/i, '_n.png'),
+		ormRel: texFileRel.replace(/\.png$/i, '_orm.png')
+	};
+}
+
+async function write_imagedata_png(map, outPath) {
+	const c = document.createElement('canvas');
+	c.width = map.width;
+	c.height = map.height;
+	c.getContext('2d').putImageData(new ImageData(map.data, map.width, map.height), 0, 0);
+	const url = c.toDataURL('image/png');
+	await BufferWrapper.fromBase64(url.slice(url.indexOf(',') + 1)).writeToFile(outPath);
+}
 
 class M2Exporter {
 	/**
@@ -204,6 +245,7 @@ class M2Exporter {
 					}
 
 					const file_existed = await generics.fileExists(texPath);
+					let pbr_rel = null;
 
 					if (glbMode && !raw) {
 						// glb mode: convert to PNG buffer without writing
@@ -226,19 +268,35 @@ class M2Exporter {
 							// convert BLP to PNG
 							const blp = new BLPFile(data);
 							await blp.saveToPNG(texPath, useAlpha ? 0b1111 : 0b0111);
+
+							// optionally derive synthetic normal/ORM maps for PBR export
+							if (config.modelsExportPBRMaps) {
+								try {
+									pbr_rel = await write_pbr_maps(blp, texPath, texFile);
+								} catch (e) {
+									log.write('Failed to generate PBR maps for texture %d: %s', texFileDataID, e.message);
+								}
+							}
 						}
 					} else {
 						log.write('Skipping M2 texture export %s (file exists, overwrite disabled)', texPath);
 					}
 
-					if (usePosix)
+					if (usePosix) {
 						texFile = ExportHelper.win32ToPosix(texFile);
+						if (pbr_rel) {
+							pbr_rel.normalRel = ExportHelper.win32ToPosix(pbr_rel.normalRel);
+							pbr_rel.ormRel = ExportHelper.win32ToPosix(pbr_rel.ormRel);
+						}
+					}
 
 					mtl?.addMaterial(matName, texFile);
 					validTextures.set(texFileDataID, {
 						matName: fullTexPaths ? texFile : matName,
 						matPathRelative: texFile,
-						matPath: texPath
+						matPath: texPath,
+						normalPathRelative: pbr_rel?.normalRel,
+						ormPathRelative: pbr_rel?.ormRel
 					});
 				} catch (e) {
 					log.write('Failed to export texture %d for M2: %s', texFileDataID, e.message);
