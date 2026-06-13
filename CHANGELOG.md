@@ -1,4 +1,4 @@
-## 0.2.18-custom (12-06-2026)
+## 0.3.0 (12-06-2026)
 - Added a "Tree view" toggle to all file list tabs (models, textures, audio, text, fonts), displaying files in a collapsible folder hierarchy instead of a flat path list. Folders list first with expand/collapse boxes; typing in the filter auto-expands matching branches.
 - Added a "listboxTreeView" configuration option that persists the tree view preference across sessions.
 - Fixed constant flickering of the texture ribbon in the combined Models/Creatures tab, caused by a feedback loop between the ribbon's content-driven width and its width-derived slot count.
