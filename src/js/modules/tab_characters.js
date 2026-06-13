@@ -3279,6 +3279,11 @@ module.exports = {
 		const ctx_watcher = state.$watch('chrModelViewerContext.gl_context', (new_ctx) => {
 			if (new_ctx) {
 				gl_context = new_ctx;
+				// the character viewer rotates the model under a fixed camera, so a
+				// world-fixed light appears to come from behind when the model is
+				// turned. Flag the context so its renderers use a camera-relative
+				// key light (the side facing the camera is always lit).
+				gl_context.cameraRelativeLight = true;
 				ctx_watcher();
 			}
 		});

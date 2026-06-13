@@ -1536,9 +1536,21 @@ class M2RendererGL {
 		}
 
 		// transform light direction to view space
-		const light_view_x = view_matrix[0] * lx + view_matrix[4] * ly + view_matrix[8] * lz;
-		const light_view_y = view_matrix[1] * lx + view_matrix[5] * ly + view_matrix[9] * lz;
-		const light_view_z = view_matrix[2] * lx + view_matrix[6] * ly + view_matrix[10] * lz;
+		let light_view_x, light_view_y, light_view_z;
+		if (this.ctx.cameraRelativeLight && !zl) {
+			// character viewer: a fixed world light appears to come from behind
+			// when the model is rotated under the fixed camera. Define the key
+			// light directly in view space so the camera-facing side is always
+			// lit (light from above-front, slightly to the side).
+			const n = 1 / Math.sqrt(0.35 * 0.35 + 0.5 * 0.5 + 1);
+			light_view_x = -0.35 * n;
+			light_view_y = -0.5 * n;
+			light_view_z = -1 * n;
+		} else {
+			light_view_x = view_matrix[0] * lx + view_matrix[4] * ly + view_matrix[8] * lz;
+			light_view_y = view_matrix[1] * lx + view_matrix[5] * ly + view_matrix[9] * lz;
+			light_view_z = view_matrix[2] * lx + view_matrix[6] * ly + view_matrix[10] * lz;
+		}
 
 		shader.set_uniform_3f('u_ambient_color', amb_r, amb_g, amb_b);
 		shader.set_uniform_3f('u_diffuse_color', dif_r, dif_g, dif_b);
