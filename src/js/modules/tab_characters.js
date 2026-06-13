@@ -28,6 +28,7 @@ const DBItems = require('../db/caches/DBItems');
 const DBItemCharTextures = require('../db/caches/DBItemCharTextures');
 const DBItemGeosets = require('../db/caches/DBItemGeosets');
 const DBItemModels = require('../db/caches/DBItemModels');
+const DBItemDisplayInfoModelMatRes = require('../db/caches/DBItemDisplayInfoModelMatRes');
 const DBItemList = require('../db/caches/DBItemList');
 const DBGuildTabard = require('../db/caches/DBGuildTabard');
 const DBCharacterCustomization = require('../db/caches/DBCharacterCustomization');
@@ -594,9 +595,11 @@ async function update_textures(core) {
 	// the chr_materials pipeline above.
 	const back_item_id = equipped_items?.[15];
 	if (back_item_id && !DBGuildTabard.isGuildTabard(back_item_id)) {
-		const back_char_info = get_current_race_gender(core);
-		const back_display = DBItemModels.getItemDisplay(back_item_id, back_char_info?.raceID, back_char_info?.genderIndex, item_skins?.[15]);
-		const cape_texture = back_display?.textures?.find(t => t > 0);
+		// Capes have no model, so the model-based getItemDisplay() misses them;
+		// resolve the cape texture straight from the display's material resource.
+		const back_display_id = DBItemModels.getDisplayId(back_item_id, item_skins?.[15]);
+		const cape_textures = back_display_id !== undefined ? DBItemDisplayInfoModelMatRes.getItemDisplayIdTextureFileIds(back_display_id) : undefined;
+		const cape_texture = cape_textures?.find(t => t > 0);
 		if (cape_texture !== undefined)
 			await active_renderer.overrideTextureType(2, cape_texture);
 	}
