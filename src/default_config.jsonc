@@ -86,6 +86,7 @@
 	"uvOverlaySize": 2048,
 	"modelsExportPBRMaps": false,
 	"modelViewerPBR": false,
+	"chrPBR": false,
 	"pbrNormalStrength": 2.5,
 	"pbrRoughness": 0.7,
 	"pbrAOStrength": 0.5,

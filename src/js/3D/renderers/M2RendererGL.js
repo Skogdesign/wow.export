@@ -437,7 +437,7 @@ class M2RendererGL {
 		await this._load_textures();
 
 		// synthetic PBR maps (generated up-front when enabled)
-		if (core.view.config.modelViewerPBR)
+		if (this._pbr_config_enabled())
 			await this._ensure_pbr_textures();
 
 		this.global_seq_times = new Float32Array(this.m2.globalLoops.length);
@@ -460,8 +460,8 @@ class M2RendererGL {
 				this.wireframeWatcher = core.view.$watch('config.modelViewerWireframe', () => {}, { deep: true });
 				this.bonesWatcher = core.view.$watch('config.modelViewerShowBones', () => {}, { deep: true });
 
-				// generate PBR maps on demand when the toggle is switched on
-				this.pbr_watcher = core.view.$watch('config.modelViewerPBR', async (enabled) => {
+				// generate PBR maps on demand when the relevant toggle is switched on
+				this.pbr_watcher = core.view.$watch(() => this._pbr_config_enabled(), async (enabled) => {
 					if (enabled)
 						await this._ensure_pbr_textures();
 				});
@@ -491,11 +491,47 @@ class M2RendererGL {
 	 * Idempotent; re-fetches the BLPs so it also works when PBR is toggled on at
 	 * runtime (CASC caches the files, so this is cheap on the second pass).
 	 */
+	/**
+	 * Whether PBR shading is enabled for this renderer's viewer. The character
+	 * viewer (camera-relative light) uses its own toggle.
+	 * @returns {boolean}
+	 */
+	_pbr_config_enabled() {
+		const cfg = core.view.config;
+		return this.ctx.cameraRelativeLight ? !!cfg.chrPBR : !!cfg.modelViewerPBR;
+	}
+
+	/**
+	 * Generate and store a normal map for a texture index from raw RGBA pixels.
+	 * Used at texture-override time so character composites (body/skin) get a
+	 * normal map even though they have no BLP file. Baked at unit strength; the
+	 * live slider drives the shader uniform.
+	 * @param {number} index
+	 * @param {{data:Uint8Array|Uint8ClampedArray, width:number, height:number}} img
+	 */
+	_generate_pbr_normal(index, img) {
+		if (!img || !img.width || !img.height)
+			return;
+
+		try {
+			const normal = pbrMaps.generate_normal_map(img, { normalStrength: 1.0 });
+			const ntex = new GLTexture(this.ctx);
+			ntex.set_rgba(normal.data, normal.width, normal.height, { generate_mipmaps: true });
+
+			const old = this.pbr_normal.get(index);
+			if (old)
+				old.dispose();
+			this.pbr_normal.set(index, ntex);
+		} catch (e) {
+			log.write('Failed to generate PBR normal map for texture %d: %s', index, e.message);
+		}
+	}
+
 	async _ensure_pbr_textures() {
-		// one-shot: bail if already attempted (even if every texture failed) and
-		// skip the character viewer, whose textures are runtime composites (set via
-		// set_canvas) rather than BLP files this approach can read.
-		if (this.pbr_generated || !this.m2?.textures || this.ctx.cameraRelativeLight)
+		// one-shot guard (true even if every texture fails). Generates from BLP
+		// files; character body composites (no fileDataID) are handled separately
+		// at texture-override time.
+		if (this.pbr_generated || !this.m2?.textures)
 			return;
 
 		this.pbr_generated = true;
@@ -515,13 +551,7 @@ class M2RendererGL {
 				const blp = new BLPFile(data);
 				const canvas = blp.toCanvas(0b0111);
 				const img = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height);
-
-				const normal = pbrMaps.generate_normal_map(
-					{ data: img.data, width: img.width, height: img.height }, { normalStrength: 1.0 });
-
-				const ntex = new GLTexture(this.ctx);
-				ntex.set_rgba(normal.data, normal.width, normal.height, { generate_mipmaps: true });
-				this.pbr_normal.set(i, ntex);
+				this._generate_pbr_normal(i, { data: img.data, width: img.width, height: img.height });
 			} catch (e) {
 				log.write('Failed to generate PBR normal map for texture %d: %s', texture.fileDataID, e.message);
 			}
@@ -1712,7 +1742,7 @@ class M2RendererGL {
 
 		// synthetic PBR (only active for the beauty pass; never for matte/emissive).
 		// strengths are live uniforms driven by the viewer sliders.
-		const pbr_enabled = pass === 'beauty' && cfg.modelViewerPBR && this.pbr_normal.size > 0;
+		const pbr_enabled = pass === 'beauty' && this._pbr_config_enabled() && this.pbr_normal.size > 0;
 		shader.set_uniform_1i('u_pbr_enabled', pbr_enabled ? 1 : 0);
 		shader.set_uniform_1i('u_normal_map', 4);
 		shader.set_uniform_1f('u_pbr_normal_strength', cfg.pbrNormalStrength ?? 2.5);
@@ -1938,6 +1968,15 @@ class M2RendererGL {
 
 				this.textures.set(i, gl_tex);
 
+				// refresh this texture's PBR normal map from the override
+				if (this._pbr_config_enabled()) {
+					try {
+						const c = blp.toCanvas(0b0111);
+						const img = c.getContext('2d').getImageData(0, 0, c.width, c.height);
+						this._generate_pbr_normal(i, { data: img.data, width: img.width, height: img.height });
+					} catch (e) { /* logged in helper */ }
+				}
+
 				if (this.useRibbon) {
 					textureRibbon.setSlotFile(i, fileDataID, this.syncID);
 					textureRibbon.setSlotSrc(i, blp.getDataURL(0b0111), this.syncID);
@@ -1971,6 +2010,18 @@ class M2RendererGL {
 				old.dispose();
 
 			this.textures.set(i, gl_tex);
+
+			// derive the PBR normal from the canvas pixels (2D canvases only; a
+			// WebGL-backed canvas has no 2D context and is skipped)
+			if (this._pbr_config_enabled()) {
+				try {
+					const ctx2d = canvas.getContext && canvas.getContext('2d');
+					if (ctx2d) {
+						const img = ctx2d.getImageData(0, 0, canvas.width, canvas.height);
+						this._generate_pbr_normal(i, { data: img.data, width: img.width, height: img.height });
+					}
+				} catch (e) { /* skip */ }
+			}
 		}
 	}
 
@@ -1999,6 +2050,11 @@ class M2RendererGL {
 				old.dispose();
 
 			this.textures.set(i, gl_tex);
+
+			// character body/skin composites arrive here with no BLP file; derive
+			// the PBR normal map straight from the composite pixels.
+			if (this._pbr_config_enabled())
+				this._generate_pbr_normal(i, { data: pixels, width, height });
 		}
 	}
 
