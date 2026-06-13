@@ -284,13 +284,14 @@ class CASC {
 		await core.progressLoadingScreen('Loading listfiles');
 		listfile.applyPreload(this.rootEntries);
 
-		// Record this build's file set and refresh the list of earlier builds
-		// available to diff against for the "Added since…" filter.
-		const buildName = this.getBuildName();
-		await buildSnapshots.capture(buildName, this.rootEntries);
-		core.view.buildSnapshots = await buildSnapshots.list(buildName);
-		core.view.addedSinceBuild = null;
+		// Reset any active patch filter and (non-blocking) load the list of
+		// patches for the "filter by patch" dropdown. build-fetch is required
+		// lazily here to avoid a circular dependency (it requires this module).
+		core.view.patchFilter = null;
 		buildSnapshots.clear();
+		require('./build-fetch').get_patch_list()
+			.then(list => { core.view.patchList = list; })
+			.catch(e => log.write('Failed to load patch list: %s', e.message));
 	}
 
 	/**

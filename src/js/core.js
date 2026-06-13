@@ -74,8 +74,9 @@ const makeNewView = () => {
 		legacyModelQuickFilters: ['m2', 'mdx', 'wmo'], // Quick filter configuration for legacy models tab.
 		audioQuickFilters: ['ogg', 'mp3', 'unk'], // Quick filter configuration for audio tab.
 		textQuickFilters: ['lua', 'xml', 'txt', 'sbt', 'wtf', 'htm', 'toc', 'xsd', 'srt'], // Quick filter configuration for text tab.
-		buildSnapshots: [], // Earlier builds available to diff against for the "Added since" filter ([{ name, count, time }]).
-		addedSinceBuild: null, // Build name the file lists are currently filtered against ("added since"), or null when off.
+		patchList: [], // Patches available for the "filter by patch" dropdown ([{ patch, version, buildConfig, prevConfig }]).
+		patchFilter: null, // Patch the file lists are currently filtered to ("added in patch"), or null when off.
+		patchFilterLoading: false, // True while a patch's file set is being fetched/diffed.
 		selectionTextures: [], // Current user selection of texture files.
 		selectionModels: [], // Current user selection of models.
 		selectionSounds: [], // Current user selection of sounds.
