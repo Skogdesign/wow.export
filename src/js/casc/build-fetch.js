@@ -8,7 +8,6 @@ const fsp = require('fs').promises;
 const generics = require('../generics');
 const constants = require('../constants');
 const log = require('../log');
-const CASC = require('./casc-source');
 
 // build-fetch retrieves the complete FileDataID set (root) of an arbitrary
 // build directly from a CDN mirror, without loading it as the active source.
@@ -63,6 +62,10 @@ const fetch_build_ids = async (buildConfigHash, onProgress) => {
 		throw new Error('failed to parse build config');
 
 	const enc_ekey = enc_match[2];
+
+	// Required lazily to avoid a load-time circular dependency (casc-source
+	// statically requires this module). CASC is fully loaded by call time.
+	const CASC = require('./casc-source');
 	const holder = { rootTypes: [], rootEntries: new Map(), encodingKeys: new Map(), encodingSizes: new Map(), unhookConfig: () => {} };
 
 	// 2. Encoding table → content-key → encoding-key map.

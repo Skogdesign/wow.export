@@ -211,6 +211,19 @@ module.exports = {
 		},
 
 		/**
+		 * Status line text: filtered/total counts plus any selection.
+		 */
+		countText: function() {
+			const total = this.itemList.length;
+			const shown = this.filteredItems.length;
+			const noun = this.unittype + (shown !== 1 ? 's' : '');
+			const base = shown !== total
+				? shown.toLocaleString() + ' of ' + total.toLocaleString() + ' ' + noun
+				: total.toLocaleString() + ' ' + noun;
+			return base + (this.selection.length > 0 ? ' · ' + this.selection.length + ' selected' : '');
+		},
+
+		/**
 		 * Total amount of scrollable rows in the current view mode.
 		 */
 		rowCount: function() {
@@ -657,6 +670,14 @@ module.exports = {
 		},
 
 		/**
+		 * Set list/tree view mode explicitly (for the segmented toggle).
+		 * @param {boolean} enabled
+		 */
+		setTreeMode: function(enabled) {
+			core.view.config.listboxTreeView = enabled;
+		},
+
+		/**
 		 * Expand or collapse a directory row in tree mode.
 		 * @param {object} row
 		 */
@@ -726,11 +747,22 @@ module.exports = {
 			</div>
 		</template>
 	</div>
-	<div class="list-status with-quick-filters" v-if="unittype">
-		<span>{{ filteredItems.length }} {{ unittype + (filteredItems.length != 1 ? 's' : '') }} found. {{ selection.length > 0 ? ' (' + selection.length + ' selected)' : '' }}</span>
-		<span class="quick-filters">
-			<a @click="toggleTreeMode" :class="{ active: treeMode }">Tree view</a><span> · </span><select class="added-since-select" :class="{ active: patchValue }" :disabled="patchLoading" :value="patchValue" @change="applyPatchFilter($event.target.value)" title="Show only files added in a specific game patch"><option value="">{{ patchLoading ? 'Loading patch…' : 'Patch: all' }}</option><option v-if="patchOptions.length === 0" value="" disabled>(loading patch list…)</option><option v-for="p in patchOptions" :key="p.patch" :value="p.patch">Added in {{ p.patch }}</option></select><template v-if="quickfilters && quickfilters.length > 0"><span> · </span>
-			Quick filter: <template v-for="(ext, index) in quickfilters" :key="ext"><a @click="applyQuickFilter(ext)" :class="{ active: activeQuickFilter === ext }">{{ ext.toUpperCase() }}</a><span v-if="index < quickfilters.length - 1"> / </span></template></template>
-		</span>
+	<div class="list-status" v-if="unittype">
+		<div class="filter-bar">
+			<span class="filter-seg">
+				<button :class="{ active: !treeMode }" @click="setTreeMode(false)">List</button>
+				<button :class="{ active: treeMode }" @click="setTreeMode(true)">Tree</button>
+			</span>
+			<select class="patch-select" :class="{ active: patchValue }" :disabled="patchLoading" :value="patchValue" @change="applyPatchFilter($event.target.value)" title="Show only files added in a specific game patch">
+				<option value="">{{ patchLoading ? 'Loading patch…' : 'Patch: all' }}</option>
+				<option v-if="patchOptions.length === 0" value="" disabled>(loading patches…)</option>
+				<option v-for="p in patchOptions" :key="p.patch" :value="p.patch">Added in {{ p.patch }}</option>
+			</select>
+			<span class="type-chips" v-if="quickfilters && quickfilters.length > 0">
+				<span class="lbl">Type</span>
+				<button class="chip" v-for="ext in quickfilters" :key="ext" :class="{ active: activeQuickFilter === ext }" @click="applyQuickFilter(ext)">{{ ext.toUpperCase() }}</button>
+			</span>
+		</div>
+		<div class="count-line">{{ countText }}</div>
 	</div></div>`
 };

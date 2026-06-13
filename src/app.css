@@ -1694,22 +1694,10 @@ input[type=number]::-webkit-outer-spin-button {
 	pointer-events: auto;
 }
 
-/* the combined tab's list panel is narrower than a full-width list tab, so let
-   the status bar (count + quick filters) wrap cleanly instead of squashing */
-#tab-creatures .list-status.with-quick-filters {
-	height: auto;
-	min-height: 27px;
-	flex-wrap: wrap;
-	row-gap: 1px;
-	column-gap: 10px;
-	font-size: 11.5px;
-	align-content: center;
-	padding-bottom: 4px;
-}
-/* the status bar wraps to two lines in this narrow panel; give the list
-   extra bottom clearance so the wrapped bar doesn't cover list rows */
+/* the combined tab's list panel is narrow, so the filter toolbar wraps to an
+   extra row; give the list more bottom clearance so it isn't covered */
 #tab-creatures .list-container .ui-listbox {
-	bottom: 45px;
+	bottom: 100px;
 }
 
 /* Models/Creatures source switch (top-left, above the list) */
@@ -2832,55 +2820,89 @@ input[type=number]::-webkit-outer-spin-button {
 	bottom: -5px;
 	background: #1f1f20;
 	left: 10px;
-	height: 27px;
 	right: 10px;
 	border-bottom-right-radius: 10px;
 	border-bottom-left-radius: 10px;
-	font-weight: bold;
-	padding-left: 10px;
-	padding-top: 3px;
-}
-.list-container .list-status.with-quick-filters {
+	padding: 11px 12px;
 	display: flex;
-	justify-content: space-between;
-	padding-right: 10px;
+	flex-direction: column;
+	gap: 10px;
 }
-.list-container .list-status .quick-filters {
-	font-weight: normal;
+.list-status .filter-bar {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+	row-gap: 9px;
 }
-.list-container .list-status .quick-filters a {
-	color: #57afe2;
-	cursor: pointer;
-	text-decoration: none;
-}
-.list-container .list-status .quick-filters a:hover {
-	text-decoration: underline;
-}
-.list-container .list-status .quick-filters a.active {
-	color: #ffffff;
-	font-weight: bold;
-}
-.list-container .list-status .quick-filters .added-since-select {
-	background: var(--background-dark);
-	color: #57afe2;
+.list-status .filter-seg {
+	display: inline-flex;
 	border: 1px solid var(--border);
-	border-radius: 3px;
-	font-size: inherit;
-	padding: 0 2px;
-	cursor: pointer;
-	max-width: 220px;
+	border-radius: 4px;
+	overflow: hidden;
 }
-.list-container .list-status .quick-filters .added-since-select.active {
+.list-status .filter-seg button {
+	background: transparent;
+	border: none;
+	color: var(--font-primary);
+	padding: 3px 10px;
+	font-size: 12px;
+	cursor: pointer;
+}
+.list-status .filter-seg button + button {
+	border-left: 1px solid var(--border);
+}
+.list-status .filter-seg button.active {
+	background: var(--font-alt);
 	color: #ffffff;
-	border-color: #57afe2;
-	font-weight: bold;
+}
+.list-status .patch-select {
+	background: var(--background-dark);
+	color: var(--font-primary);
+	border: 1px solid var(--border);
+	border-radius: 4px;
+	font-size: 12px;
+	padding: 3px 4px;
+	cursor: pointer;
+	max-width: 160px;
+}
+.list-status .patch-select.active {
+	color: #ffffff;
+	border-color: var(--font-alt);
+}
+.list-status .type-chips {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+}
+.list-status .type-chips .lbl {
+	font-size: 11px;
+	color: var(--font-faded);
+}
+.list-status .chip {
+	background: transparent;
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	color: var(--font-primary);
+	padding: 2px 9px;
+	font-size: 11px;
+	cursor: pointer;
+}
+.list-status .chip.active {
+	background: var(--font-alt);
+	border-color: var(--font-alt);
+	color: #ffffff;
+}
+.list-status .count-line {
+	font-size: 11.5px;
+	color: var(--font-faded);
 }
 .list-container .ui-listbox {
 	position: absolute;
 	top: 0;
 	left: 0;
 	right: 0;
-	bottom: 25px;
+	bottom: 68px;
 }
 .list-container .ui-datatable {
 	position: absolute;

@@ -6,6 +6,7 @@
 const BLTEReader = require('./blte-reader').BLTEReader;
 const listfile = require('./listfile');
 const buildSnapshots = require('./build-snapshots');
+const buildFetch = require('./build-fetch');
 const dbd_manifest = require('./dbd-manifest');
 const log = require('../log');
 const core = require('../core');
@@ -285,11 +286,10 @@ class CASC {
 		listfile.applyPreload(this.rootEntries);
 
 		// Reset any active patch filter and (non-blocking) load the list of
-		// patches for the "filter by patch" dropdown. build-fetch is required
-		// lazily here to avoid a circular dependency (it requires this module).
+		// patches for the "filter by patch" dropdown.
 		core.view.patchFilter = null;
 		buildSnapshots.clear();
-		require('./build-fetch').get_patch_list()
+		buildFetch.get_patch_list()
 			.then(list => { core.view.patchList = list; })
 			.catch(e => log.write('Failed to load patch list: %s', e.message));
 	}
